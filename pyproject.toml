@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 name = "PyCasting"
 version = "0.1.001"
 dependencies = [
-  "vtk"
+  "vtk",
   "FEMtoolkit @ git+https://github.com/mayakruha/FEMtoolkit.git",
   "meshio @ git+https://github.com/mayakruha/meshio.git",
 ]
