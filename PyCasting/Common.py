@@ -242,19 +242,18 @@ class Circle_tube(CCM):
                 self.mould_resist(alfa_wat)
 #-----------------------------------------------
 class Rect_tube(CCM):
-    def __init__(self, Height, W_billet, Wat_thick, Mould_thick, Th_billet, Shape=[[0.0,1.2],[0.0,0.0]],
+    def __init__(self, Height, Perim, Wat_thick, Mould_thick, Th_billet, Shape=[[0.0,1.2],[0.0,0.0]],
                             Coating=[[0.0,1.2],[0.0,0.0]], Mould_lamda=370, Coat_lamda=80):
-        self.Height=Height                                                      # Mould height, m
-        self.Perim=2*(W_billet+Th_billet)                                       # Full perimeter of tube, m
-        self.deff=2*Wat_thick                                                   # Effective diameter, m
-        self.Wat_sec=2*Wat_thick*(W_billet+Th_billet+4*Mould_thick+2*Wat_thick) # Total cross section of cooling channel, m2
-        self.Mould_thick=Mould_thick                                            # Distance between water and mould surface, m
-        self.Thb=Th_billet/2                                                    # Size of billet to calculate gap due to shrinkage
-        self.Wdb=W_billet                                                       # Width of billet cross section, m
-        self.Shape=Shape                                                        # Shape of mould surface - deflection inside, [[axis,m], [deflection,m]] 
-        self.Coating=Coating                                                    # Coating thickness [[axis, m], [thicknes, m]]
-        self.Mould_lamda=Mould_lamda                                            # Mould material conductivity, W/mK
-        self.Coat_lamda=Coat_lamda                                              # Coating conductivity, W/mK
+        self.Height=Height            # Mould height, m
+        self.Perim=Perim              # Full perimeter of tube, m
+        self.deff=2*Wat_thick         # Effective diameter, m
+        self.Wat_sec=Wat_thick*Perim  # Total cross section of cooling channel, m2
+        self.Mould_thick=Mould_thick  # Distance between water and mould surface, m
+        self.Thb=Th_billet/2          # Size of billet to calculate gap due to shrinkage
+        self.Shape=Shape              # Shape of mould surface - deflection inside, [[axis,m], [deflection,m]] 
+        self.Coating=Coating          # Coating thickness [[axis, m], [thicknes, m]]
+        self.Mould_lamda=Mould_lamda  # Mould material conductivity, W/mK
+        self.Coat_lamda=Coat_lamda    # Coating conductivity, W/mK
         self.LogFile=''
 #--------------------------------------------------------------------
 #-CREEP FUNCTIONS: Stress[MPa]=func(EpsR[1/sec], Temp[C]))-----------
