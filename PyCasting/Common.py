@@ -259,8 +259,8 @@ class Rect_tube(CCM):
 #--------------------------------------------------------------------
 #-CREEP FUNCTIONS: Stress[MPa]=func(EpsR[1/sec], Temp[C]))-----------
 #--------------------------------------------------------------------
-def creep_NISK(EpsR,Temp, A=21900E+6, mu=0.2, lmbda=0.004):
-    return A*(EpsR**mu)*exp(-(Temp+273)*lmbda)
+def creep_NISK(EpsR,Temp, B=21900E+6, mu=0.2, lmbda=0.004):
+    return B*(EpsR**mu)*exp(-(Temp+273)*lmbda)
 #---------------------------------
 #-------OUTPUT FUNCTIONS----------
 #---------------------------------
