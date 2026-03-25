@@ -178,8 +178,7 @@ class Casting1D(Solidification):
             Log_message('\tThe minimum temperature ('+str(minTemp)+') exceeds ',logfile)
             Log_message('the liquidus temperature ('+str(self.Tlik)+') ',logfile)
         if iter_time>FullTime:
-            Log_message('\tThe time ('+str(iter_time)+') exceeds ',logfile)
-            Log_message('the specified time ('+str(FullTime)+') ',logfile)
+            Log_message('\tThe time ('+str(iter_time)+') exceeds the specified time ('+str(FullTime)+') ',logfile)
         logfile.close()
     def NormalForce(self, j, n0, ksi2, ksi3, creep_law):
         Nf=[0,0]
