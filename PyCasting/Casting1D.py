@@ -36,9 +36,10 @@ def coldplate(model, Tcld, thick):
 #------------------------------------------
 #-------------Casting class----------------
 class Casting1D(Solidification):
-    def __init__(self, HTC1, HTC2, Dim, n=100, Radial=False, R0=0, LogFile='Casting1D.log'):
+    def __init__(self, HTC1, HTC2, Dim, n=100, Radial=False, R0=0, LogFile='Casting1D.log', Rewrite=True):
         self.LogFile=LogFile
-        logfile=open(LogFile,'w')
+        if Rewrite: logfile=open(LogFile,'w')
+        else: logfile=open(LogFile,'a')
         Log_message('** Model preparation has started',logfile)
         logfile.close()
         self.HTC1=HTC1       # htc class
