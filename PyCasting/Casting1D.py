@@ -107,10 +107,10 @@ class Casting1D(Solidification):
                 self.results[2].append(self.dX*(self.k2-self.k1-1)*1000) # Thickness [mm]
                 self.results[3].append(T1)                     # BulkTemp1 [C]
                 self.results[4].append(alfa1)                  # HTC1 [W/m2*K]
-                self.results[5].append(Q1)                     # Flux1 [W/m2]
+                self.results[5].append(abs(Q1))                # Flux1 [W/m2]
                 self.results[6].append(T2)                     # BulkTemp2 [C]
                 self.results[7].append(alfa2)                  # HTC2 [W/m2*K]
-                self.results[8].append(Q2)                     # Flux2 [W/m2]
+                self.results[8].append(abs(Q2))                # Flux2 [W/m2]
                 self.results[9].append(self.T.copy())          # Array-Temp [C]
                 logfile=open(self.LogFile,'a')
                 Log_message('  {:6.1f}   |    {:6.1f}   |    {:6.2f}     |     {:6.1f}     |     {:6.2f}     |    {:6.3f}     |    {:6.3f}'.format(iter_time, minTemp, self.dX*(self.k2-self.k1-1)*1000, T1, T2, alfa1/1000, alfa2/1000),logfile)
@@ -262,7 +262,7 @@ class Casting1D(Solidification):
                     elif ((F2[1]-F0[1])*F0[1])>=0: ksi3=ksi3
                     else: ksi3+=dksi3
             Shrink+=ksi2*dtau
-            self.results[self.Tindx-1].append(Shrink)
+            self.results[self.Tindx-1].append(-Shrink)
             self.results[-2].append(self.KsiI.copy())
             for i in range(self.n+1):
                 if i<nk:
