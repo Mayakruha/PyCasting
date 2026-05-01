@@ -1,4 +1,4 @@
-from math import exp, log, pi
+from math import exp, log, tan, pi
 import numpy as np
 #---------------------------------
 #-----SOLIDIFICATION CLASS--------
@@ -11,15 +11,15 @@ class Solidification:
         self.Tlik=1535.1-(88*C+8*Si+5*Mn+1.5*Cr+4*Ni+5*Cu+3*Al+30*P+25*S+80*N)  #Liquidus temperature, Celsius
         self.beta_liq=0.000031 # thermal expansion of luquid steel, 1/K
         self.beta_sol=(2.7-0.16*C+0.039*Mn-0.1*Si-0.019*Cr-0.016*Ni-0.5*P-0.25*S)/140000 # thermal expansion of solid steel, 1/K
-        self.kvis=7.91E-7  # kinematic viscosity of luquid steel, m2/sec
-        self.thdif=5.45E-6 # thermal diffusivity of luquid steel, m2/sec
+        self.kvis=7.91E-7    # kinematic viscosity of luquid steel, m2/sec
+        self.thdif=5.45E-6   # thermal diffusivity of luquid steel, m2/sec
         self.lamda_liq=26.0  # conductivity of liqid steel, W/m*K
         self.lamda=32.0      # conductivity of solid steel, W/m*K
-        self.L=272E+3      # heat of solidification, J/kg
-        self.ro_sol=7300   # solid steel density, kg/m3
-        self.ro_liq=7000   # liquid steel density, kg/m3        
-        self.Cl=680        # heat capacity for liquid steel, J/kg*K
-        self.Cr=795        # heat capacity for solid steel, J/kg*K
+        self.L=272E+3        # heat of solidification, J/kg
+        self.ro_sol=7300     # solid steel density, kg/m3
+        self.ro_liq=7000     # liquid steel density, kg/m3        
+        self.Cl=680          # heat capacity for liquid steel, J/kg*K
+        self.Cr=795          # heat capacity for solid steel, J/kg*K
         self.Hl=(self.ro_liq*self.Cl+self.ro_sol*self.Cr)*(self.Tlik-self.Tsol)/2+(self.ro_liq+self.ro_sol)*self.L/2 #J/m3
         self.HTC1.ImportProp(self.lamda_liq, self.beta_liq, self.kvis, self.thdif, self.Tsol, self.Tlik, self.Cl, self.ro_liq, self.beta_sol)
         self.HTC2.ImportProp(self.lamda_liq, self.beta_liq, self.kvis, self.thdif, self.Tsol, self.Tlik, self.Cl, self.ro_liq, self.beta_sol) 
@@ -52,7 +52,7 @@ class HTC:
         self.Cl=Cl             # heat capacity for liquid steel, J/kg*K
         self.ro_liq=ro_liq     #liquid steel density, kg/m3
         self.beta_sol=beta_sol # thermal expansion of solid steel, 1/K
-    def htc(self, tm, temp): # tm - time [sec], temp - temperature [C]
+    def htc(self, tm, temp, s=0): # tm - time [sec], temp - temperature [C], surface coordinate [m]
         return 0, 0, 0 # htc [W/m2K], temp [C], Heat flux [W/m2]
     def HeatUp(self, J, tm, move): # J - average energy density [J/m2], tm - time [sec], move - movement of border [m]
         """function to change bulk temperature according to energy"""
@@ -61,9 +61,9 @@ class HTC:
 #----HTC class to handle a table [time, htc]----
 class HTC_tab(HTC):
     def SetParams(self, Tmet, tab):
-        self.Tmet=Tmet   # function (tm) returns metal temparature over time
-        self.htc_tab=tab    # table with two rows [time, htc]
-    def htc(self, tm, temp):
+        self.Tmet=Tmet    # function (tm) returns metal temparature over time
+        self.htc_tab=tab  # table with two rows [time, htc]
+    def htc(self, tm, temp, s=0):
         if self.Tmet(tm)<=temp:
             return 0, self.Tmet(tm), 0
         else:
@@ -74,7 +74,7 @@ class HTC_nat_conv(HTC):
     def SetParams(self, Tmet, Length):
         self.Tmet=Tmet     # function (tm) returns metal temparature over time
         self.Length=Length # function (tm) returns length over time        
-    def htc(self, tm, temp):
+    def htc(self, tm, temp, s=0):
         if self.Tmet(tm)<=temp:
             return 0, self.Tmet(tm)
         else:
@@ -95,7 +95,7 @@ class HTC_pool(HTC):
         self.Tbulk=Tbulk     # current temeprature        
         self.htc_tab=htc_tab # table with two rows [[z,m];[HTC, W/m2K]]
         self.X0=self.Size
-    def htc(self, tm, temp):
+    def htc(self, tm, temp, s=0):
         z=self.Level+self.v*tm/60        
         if self.X0<=0:
             return 0, 0
@@ -110,6 +110,19 @@ class HTC_pool(HTC):
 #----------CCM HTC classes----------------------
 #----General class for CCM----------------------
 class CCM(HTC):
+    def NozzleDens(self,s, z, z0, W, L, Qwat, s0=0, kw=10, fi=pi/3):
+        """return water density, l/m2*min
+            s, z - coordinates, m;  s0, z0 - coordinates of nozzel center, m
+            W, L - width and length of spray zone, m
+            Qwat - water flow, l/min
+            kw, fi - define water distribution
+        """
+        x=2*abs(s-s0)/W
+        if x<1:
+            qavrg=(1+1/kw)*2.3*Qwat / W / L / tan(fi/2) / (1-exp(-2.3/tan(fi/2)))
+            return qavrg*(1-x**kw)*exp(-4.6*abs(z-z0)/L/tan(fi/2))
+        else:
+            return 0
     def Prandtl(self,Temp):
         return 12*exp(-0.036*Temp)+1.336343
     def geom_coeff(self,Pr):
@@ -118,14 +131,14 @@ class CCM(HTC):
         if T>self.flux_Tliq: return self.flux_alfa_liq
         elif T<self.flux_Tmelt: return self.flux_alfa_sol
         else: return (T-self.flux_Tmelt)/(self.flux_Tliq-self.flux_Tmelt)*(self.flux_alfa_liq-self.flux_alfa_sol)+self.flux_alfa_sol
-    def SetParams(self, v, Zm,  Qwat_mould, Taper, Qwat_spray=[[0,0]], Twat_in=20, Tair=20, Tspraywat=20,
-                  flux_Tmelt=1115, flux_Tliq=1145, flux_lamda=1.5, flux_alfa_liq=5900, flux_alfa_sol=1200):
+    def SetParams(self, v, Zm,  Qwat_mould, Taper, Qwat_spray, Twat_in=20, Tair=20, Tspraywat=20,
+                  flux_Tmelt=1115, flux_Tliq=1145, flux_lamda=1.5, flux_alfa_liq=5900, flux_alfa_sol=1200, RollCont=0.005):
         self.v=v                          # Casting speed [m/min]
         self.Level=Zm                     # Level [m]
         self.Qwat_mould=Qwat_mould        # Water flow in the mould [l/min]
         self.Taper=Taper                  # taper of a side over height, m
-        self.Qwat_spray=Qwat_spray        # Water flow in the spray zone - list of (end of zone, m; water flux, l/m2*min)
-        self.Twat=Twat_in              # Temperature of water [Celsius]
+        self.Qwat_spray=Qwat_spray        # Water flow in the spray zone - {zone name: water flux, l/min}
+        self.Twat=Twat_in                 # Temperature of water [Celsius]
         self.Tair=Tair                    # Temperature of air [Celsius]
         self.Tspraywat=Tspraywat          # Temperature of water in the spray system [Celsius]
         self.flux_Tmelt=flux_Tmelt        # melting temperature for mould flux, C
@@ -133,6 +146,7 @@ class CCM(HTC):
         self.flux_lamda=flux_lamda        # flux conductivity, W/mK
         self.flux_alfa_liq=flux_alfa_liq  # HTC for luquid flux, W/m2*K
         self.flux_alfa_sol=flux_alfa_sol  # HTC for solid flux, W/m2*K
+        self.RollCont=RollCont            # Width of contact between a roll and a billet, m
         self.Zm=Zm
         self.v_wat=self.Qwat_mould/60000/self.Wat_sec # m/sec
         self.set_level(self.Zm)                       # Calculate: Pr, Re, alfa_wat0, Rm, alfa_watz
@@ -145,15 +159,52 @@ class CCM(HTC):
         Log_message('Reynolds: '+str(self.Re), logfile)
         Log_message('Nominal HTC, kW/(m2K): '+str(self.alfa_wat0/1000), logfile)
         Log_message('Solid flux thickness at meniscus, mm: '+str(self.flux_thick_m*1000), logfile)
+        self.iz=0
+        self.RollDist=self.SecCool[self.iz][0]-self.Height-self.RollCont/2
+        self.Nozzle_z=self.Height+self.RollDist/2
+        self.Zones={}
+        for part in self.SecCool:
+            for nozzle in part[1]:
+                if not nozzle[1] in self.Zones:
+                    self.Zones[nozzle[1]]=[0,0,''] # Number of nozzles; Nozzle flow , l/min; Nozzle Name
+                self.Zones[nozzle[1]][0]+=1
+        for NozzleName in self.Nozzles:
+            for ZoneName in self.Nozzles[NozzleName][3]:
+                self.Zones[ZoneName][2]=NozzleName
+        Log_message('\n** Heat transfer parameters in the second cooling system', logfile)
+        for ZoneName in self.Zones:
+            Log_message('Zone '+ZoneName+':', logfile)
+            Log_message('  Nozzle: '+self.Zones[ZoneName][2], logfile)
+            Log_message('  Number of nozzles '+str(self.Zones[ZoneName][0])+':', logfile)
+            self.Zones[ZoneName][1]=self.Qwat_spray[ZoneName]/self.Zones[ZoneName][0]
+            Log_message('  Water flow for a nozzle, l/min: '+str(self.Zones[ZoneName][1]), logfile)
         logfile.close()
     def set_level(self, z):
-        lamda_wat=0.55748+0.0021525*self.Twat-0.0000097*self.Twat**2 #W/m*K
-        visc_wat=1.53555258E-06*exp(-0.036*self.Twat)+2.52805091E-07 #m2/sec
-        self.Pr=self.Prandtl(self.Twat)
-        self.Re=self.v_wat*self.deff/visc_wat
-        self.alfa_wat0=0.023*lamda_wat/self.deff*self.Re**0.8*self.Pr**0.4*self.geom_coeff(self.Pr)
-        self.alfa_watz=self.alfa_wat0*(1+self.deff/z/2)
-        self.Coat_thick=np.interp(z, self.Coating[0],self.Coating[1])
+        if z<=self.Height:
+            # -----mould parameters
+            lamda_wat=0.55748+0.0021525*self.Twat-0.0000097*self.Twat**2 #W/m*K
+            visc_wat=1.53555258E-06*exp(-0.036*self.Twat)+2.52805091E-07 #m2/sec
+            self.Pr=self.Prandtl(self.Twat)
+            self.Re=self.v_wat*self.deff/visc_wat
+            self.alfa_wat0=0.023*lamda_wat/self.deff*self.Re**0.8*self.Pr**0.4*self.geom_coeff(self.Pr)
+            self.alfa_watz=self.alfa_wat0*(1+self.deff/z/2)
+            self.Coat_thick=np.interp(z, self.Coating[0],self.Coating[1])
+        else:
+            # -----spray parameters
+            self.SprayDens={}
+            for s in self.PointList:self.SprayDens[s]=0
+            Flag=False
+            while z>self.SecCool[self.iz][0] and self.iz<len(self.SecCool)-1:
+                self.iz+=1
+                Flag=True
+            if Flag:
+                self.RollDist=self.SecCool[self.iz][0]-self.SecCool[self.iz-1][0]-self.RollCont
+                self.Nozzle_z=self.SecCool[self.iz-1][0]+self.RollDist/2+self.RollCont/2
+            for NozzlePar in self.SecCool[self.iz][1]:
+                NozzleName=self.Zones[NozzlePar[1]][2]
+                for i, s in enumerate(self.PointList):
+                    self.SprayDens[s]+=self.NozzleDens(s, z, self.Nozzle_z, self.Nozzles[NozzleName][0], self.RollDist, self.Zones[NozzlePar[1]][1],
+                                       s0=NozzlePar[0], kw=self.Nozzles[NozzleName][1], fi=self.Nozzles[NozzleName][2])
     def mould_shape(self,z):#m
         return self.Taper*z/self.Height+np.interp(z,self.Shape[0],self.Shape[1])
     def HeatUp(self, J, tm, move): # J - average energy density [J/m2], tm - time [sec], move - movement of border [m]
@@ -164,7 +215,7 @@ class CCM(HTC):
         return self.Mould_thick/self.Mould_lamda+self.Coat_thick/self.Coat_lamda+1/alfa_wat
     def htc_resist(self, alfa_wat, temp):
         return 1/self.flux_alfa(temp)/self.v**0.8+self.flux_thickz/self.flux_lamda+self.mould_resist(alfa_wat)
-    def htc(self, tm, temp):#W/m2
+    def htc(self, tm, temp, s=0):#W/m2
         z=self.Level+self.v*tm/60
         if z<=self.Height:
             if z>self.Zm:
@@ -182,22 +233,12 @@ class CCM(HTC):
             alfa=1/self.htc_resist(self.alfa_wat,temp)
             return alfa, self.Twat, alfa*(self.Twat-temp) #mould
         else: 
-            iz=0
-            while iz<len(self.Qwat_spray):
-                if z>self.Qwat_spray[iz][0]:
-                    iz+=1
-                else:
-                    break
-            if iz>=len(self.Qwat_spray):
-                alfa=5.670367E-8*((temp+273)**4-(self.Tair+273)**4)/(temp-self.Tair)
-                return alfa, self.Tair, alfa*(self.Tair-temp)
-            else:
-                alfa= 142*(self.Qwat_spray[iz][1]**0.55)*(1-7.5E-3*self.Tspraywat)*exp(-0.0012*(temp+273))+5.670367E-8*((temp+273)**4-(self.Tair+273)**4)/(temp-self.Tair) #spray
-                return alfa, self.Tair, alfa*(self.Tair-temp)
+            alfa= 142*(self.SprayDens[s]**0.55)*(1-7.5E-3*self.Tspraywat)*exp(-0.0012*(temp+273))+5.670367E-8*((temp+273)**4-(self.Tair+273)**4)/(temp-self.Tair) #spray
+            return alfa, self.Tair, alfa*(self.Tair-temp)
 #-----------------------------------------------
 class CCM_MouldWithChannels(CCM):
-    def __init__(self, Height, Perim, Nch, Sch, Pch, Mould_thick, Taper_size, Shape=[[0.0,1.2],[0.0,0.0]],
-                            Coating=[[0.0,1.2],[0.0,0.0]], Mould_lamda=370, Coat_lamda=80):
+    def __init__(self, Height, Perim, Nch, Sch, Pch, Mould_thick, Taper_size, Nozzles, SecCool,
+                 Shape=[[0.0,1.2],[0.0,0.0]], Coating=[[0.0,1.2],[0.0,0.0]], Mould_lamda=370, Coat_lamda=80):
         #Nch - number of cooling channels
         #Sch - cross section of a cooling channel, m2
         #Pch - perimeter of a cooling channel, m
@@ -207,15 +248,18 @@ class CCM_MouldWithChannels(CCM):
         self.Wat_sec=Nch*Sch         # Summary cross section of cooling channels, m2
         self.Mould_thick=Mould_thick # Distance between water and mould surface, m
         self.Thb=Taper_size/2        # Size of billet to calculate gap due to shrinkage
+        self.Nozzles=Nozzles         # Nozzles parameters - {Name:[W, kw, fi, Zones list]}
+        self.SecCool=SecCool         # Second cooling parameters - [[roll z-coordinate,[[s0, Zone name],...]],...]
         self.Shape=Shape             # Shape of mould surface - deflection inside, [[axis,m], [deflection,m]] 
         self.Coating=Coating         # Coating thickness [[axis, m], [thicknes, m]]
         self.Mould_lamda=Mould_lamda # Mould material conductivity, W/mK
         self.Coat_lamda=Coat_lamda   # Coating conductivity, W/mK
+        self.PointList=[0,]          # List of coordinates (s) for htc calculations
         self.LogFile=''
 #-----------------------------------------------
 class Circle_tube(CCM):
-    def __init__(self, Height, D_billet, Wat_thick, Mould_thick, Shape=[[0.0,1.2],[0.0,0.0]],
-                            Coating=[[0.0,1.2],[0.0,0.0]], Mould_lamda=370, Coat_lamda=80):
+    def __init__(self, Height, D_billet, Wat_thick, Mould_thick, Nozzles, SecCool,
+                 Shape=[[0.0,1.2],[0.0,0.0]], Coating=[[0.0,1.2],[0.0,0.0]], Mould_lamda=370, Coat_lamda=80):
         # D_billet    billet diameter, m
         # Wat_thick   thickness of water layer, m    
         self.Height=Height                                               # Mould height, m
@@ -224,10 +268,13 @@ class Circle_tube(CCM):
         self.Wat_sec=pi*Wat_thick*(2*(D_billet/2+Mould_thick)+Wat_thick) # Total cross section of cooling channel, m2
         self.Mould_thick=Mould_thick                                     # Distance between water and mould surface, m
         self.Thb=D_billet/2                                              # Size of billet to calculate gap due to shrinkage
+        self.Nozzles=Nozzles                                             # Nozzles parameters - {Name:[W, kw, fi, Zones list]}
+        self.SecCool=SecCool                                             # Second cooling parameters - [[roll z-coordinate,[[s0, Zone name],...]],...]
         self.Shape=Shape                                                 # Shape of mould surface - deflection inside, [[axis,m], [deflection,m]] 
         self.Coating=Coating                                             # Coating thickness [[axis, m], [thicknes, m]]
         self.Mould_lamda=Mould_lamda                                     # Mould material conductivity, W/mK
         self.Coat_lamda=Coat_lamda                                       # Coating conductivity, W/mK
+        self.PointList=[0,]                                              # List of coordinates (s) for htc calculations
         self.LogFile=''
         self.R=D_billet/2                                                # Radius of billet cross section, m
         self.Wat_thick=Wat_thick                                         # Thickness of water layer, m
@@ -242,18 +289,21 @@ class Circle_tube(CCM):
                 self.mould_resist(alfa_wat)
 #-----------------------------------------------
 class Rect_tube(CCM):
-    def __init__(self, Height, Perim, Wat_thick, Mould_thick, Th_billet, Shape=[[0.0,1.2],[0.0,0.0]],
-                            Coating=[[0.0,1.2],[0.0,0.0]], Mould_lamda=370, Coat_lamda=80):
-        self.Height=Height                                                      # Mould height, m
-        self.Perim=Perim                                       # Full perimeter of tube, m
-        self.deff=2*Wat_thick                                                   # Effective diameter, m
-        self.Wat_sec=Wat_thick*Perim           # Total cross section of cooling channel, m2
-        self.Mould_thick=Mould_thick                                            # Distance between water and mould surface, m
-        self.Thb=Th_billet/2                                                    # Size of billet to calculate gap due to shrinkage
-        self.Shape=Shape                                                        # Shape of mould surface - deflection inside, [[axis,m], [deflection,m]] 
-        self.Coating=Coating                                                    # Coating thickness [[axis, m], [thicknes, m]]
-        self.Mould_lamda=Mould_lamda                                            # Mould material conductivity, W/mK
-        self.Coat_lamda=Coat_lamda                                              # Coating conductivity, W/mK
+    def __init__(self, Height, Perim, Wat_thick, Mould_thick, Th_billet, Nozzles, SecCool,
+                 Shape=[[0.0,1.2],[0.0,0.0]], Coating=[[0.0,1.2],[0.0,0.0]], Mould_lamda=370, Coat_lamda=80):
+        self.Height=Height           # Mould height, m
+        self.Perim=Perim             # Full perimeter of tube, m
+        self.deff=2*Wat_thick        # Effective diameter, m
+        self.Wat_sec=Wat_thick*Perim # Total cross section of cooling channel, m2
+        self.Mould_thick=Mould_thick # Distance between water and mould surface, m
+        self.Thb=Th_billet/2         # Size of billet to calculate gap due to shrinkage
+        self.Nozzles=Nozzles         # Nozzles parameters - {Name:[W, kw, fi, Zones list]}
+        self.SecCool=SecCool         # Second cooling parameters - [[roll z-coordinate,[[s0, Zone name],...]],...]
+        self.Shape=Shape             # Shape of mould surface - deflection inside, [[axis,m], [deflection,m]] 
+        self.Coating=Coating         # Coating thickness [[axis, m], [thicknes, m]]
+        self.Mould_lamda=Mould_lamda # Mould material conductivity, W/mK
+        self.Coat_lamda=Coat_lamda   # Coating conductivity, W/mK
+        self.PointList=[0,]          # List of coordinates (s) for htc calculations
         self.LogFile=''
 #--------------------------------------------------------------------
 #-CREEP FUNCTIONS: Stress[MPa]=func(EpsR[1/sec], Temp[C]))-----------
@@ -264,8 +314,8 @@ def creep_NISK(EpsR,Temp, B=21900E+6, mu=0.2, lmbda=0.004):
 #-------OUTPUT FUNCTIONS----------
 #---------------------------------
 def Log_message(text, file, Screen=True):
-  if Screen: print(text)
-  file.write(text+'\n')
+    if Screen: print(text)
+    file.write(text+'\n')
 #---------------------------------
 def output_csv(FileName, model):
     f=open(FileName,'w')
