@@ -52,6 +52,8 @@ class HTC:
         self.Cl=Cl             # heat capacity for liquid steel, J/kg*K
         self.ro_liq=ro_liq     #liquid steel density, kg/m3
         self.beta_sol=beta_sol # thermal expansion of solid steel, 1/K
+    def set_level(self, tm):
+        pass
     def htc(self, tm, temp, s=0): # tm - time [sec], temp - temperature [C], surface coordinate [m]
         return 0, 0, 0 # htc [W/m2K], temp [C], Heat flux [W/m2]
     def HeatUp(self, J, tm, move): # J - average energy density [J/m2], tm - time [sec], move - movement of border [m]
@@ -110,7 +112,7 @@ class HTC_pool(HTC):
 #----------CCM HTC classes----------------------
 #----General class for CCM----------------------
 class CCM(HTC):
-    def NozzleDens(self,s, z, z0, W, L, Qwat, s0=0, kw=10, fi=pi/3):
+    def NozzleDens(self,s, z, z0, W, L, Qwat, s0, kw, fi):
         """return water density, l/m2*min
             s, z - coordinates, m;  s0, z0 - coordinates of nozzel center, m
             W, L - width and length of spray zone, m
@@ -131,8 +133,8 @@ class CCM(HTC):
         if T>self.flux_Tliq: return self.flux_alfa_liq
         elif T<self.flux_Tmelt: return self.flux_alfa_sol
         else: return (T-self.flux_Tmelt)/(self.flux_Tliq-self.flux_Tmelt)*(self.flux_alfa_liq-self.flux_alfa_sol)+self.flux_alfa_sol
-    def SetParams(self, v, Zm,  Qwat_mould, Taper, Qwat_spray, Twat_in=20, Tair=20, Tspraywat=20,
-                  flux_Tmelt=1115, flux_Tliq=1145, flux_lamda=1.5, flux_alfa_liq=5900, flux_alfa_sol=1200, RollCont=0.005):
+    def SetParams(self, v, Zm,  Qwat_mould, Taper, Qwat_spray, Twat_in=20, Tair=20, Tspraywat=20, flux_Tmelt=1115, flux_Tliq=1145,
+                  flux_lamda=1.5, flux_alfa_liq=5900, flux_alfa_sol=1200, RollCont=0.005, alfa_roll=500, alfa_nat=15):
         self.v=v                          # Casting speed [m/min]
         self.Level=Zm                     # Level [m]
         self.Qwat_mould=Qwat_mould        # Water flow in the mould [l/min]
@@ -147,7 +149,10 @@ class CCM(HTC):
         self.flux_alfa_liq=flux_alfa_liq  # HTC for luquid flux, W/m2*K
         self.flux_alfa_sol=flux_alfa_sol  # HTC for solid flux, W/m2*K
         self.RollCont=RollCont            # Width of contact between a roll and a billet, m
+        self.alfa_roll=alfa_roll          # Contact htc under rolls, W/m2*K
+        self.alfa_nat=alfa_nat            # Natural htc, W/m2*K
         self.Zm=Zm
+        self.shrink=0
         self.v_wat=self.Qwat_mould/60000/self.Wat_sec # m/sec
         self.set_level(self.Zm)                       # Calculate: Pr, Re, alfa_wat0, Rm, alfa_watz
         self.flux_thick_m=self.flux_lamda*((self.flux_Tmelt-self.Twat)/self.flux_alfa(self.Tsol)/self.v**0.8/(self.Tsol-self.flux_Tmelt)-self.mould_resist(self.alfa_watz))
@@ -179,7 +184,8 @@ class CCM(HTC):
             self.Zones[ZoneName][1]=self.Qwat_spray[ZoneName]/self.Zones[ZoneName][0]
             Log_message('  Water flow for a nozzle, l/min: '+str(self.Zones[ZoneName][1]), logfile)
         logfile.close()
-    def set_level(self, z):
+    def set_level(self, tm):
+        z=self.Level+self.v*tm/60
         if z<=self.Height:
             # -----mould parameters
             lamda_wat=0.55748+0.0021525*self.Twat-0.0000097*self.Twat**2 #W/m*K
@@ -190,21 +196,22 @@ class CCM(HTC):
             self.alfa_watz=self.alfa_wat0*(1+self.deff/z/2)
             self.Coat_thick=np.interp(z, self.Coating[0],self.Coating[1])
         else:
-            # -----spray parameters
             self.SprayDens={}
-            for s in self.PointList:self.SprayDens[s]=0
+            for s in self.PointList:self.SprayDens[s]=0.0
             Flag=False
             while z>self.SecCool[self.iz][0] and self.iz<len(self.SecCool)-1:
                 self.iz+=1
                 Flag=True
+            # -----spray parameters
             if Flag:
                 self.RollDist=self.SecCool[self.iz][0]-self.SecCool[self.iz-1][0]-self.RollCont
                 self.Nozzle_z=self.SecCool[self.iz-1][0]+self.RollDist/2+self.RollCont/2
-            for NozzlePar in self.SecCool[self.iz][1]:
-                NozzleName=self.Zones[NozzlePar[1]][2]
-                for i, s in enumerate(self.PointList):
-                    self.SprayDens[s]+=self.NozzleDens(s, z, self.Nozzle_z, self.Nozzles[NozzleName][0], self.RollDist, self.Zones[NozzlePar[1]][1],
-                                       s0=NozzlePar[0], kw=self.Nozzles[NozzleName][1], fi=self.Nozzles[NozzleName][2])
+            if (self.iz>0 and z-self.SecCool[self.iz-1][0]>self.RollCont/2) or (self.SecCool[self.iz][0]-z>self.RollCont/2):
+                for NozzlePar in self.SecCool[self.iz][1]:                
+                    NozzleName=self.Zones[NozzlePar[1]][2]
+                    for i, s in enumerate(self.PointList):
+                        self.SprayDens[s]+=self.NozzleDens(s, z, self.Nozzle_z, self.Nozzles[NozzleName][0], self.RollDist, self.Zones[NozzlePar[1]][1],
+                                           s0=NozzlePar[0], kw=self.Nozzles[NozzleName][1], fi=self.Nozzles[NozzleName][2])
     def mould_shape(self,z):#m
         return self.Taper*z/self.Height+np.interp(z,self.Shape[0],self.Shape[1])
     def HeatUp(self, J, tm, move): # J - average energy density [J/m2], tm - time [sec], move - movement of border [m]
@@ -218,12 +225,11 @@ class CCM(HTC):
     def htc(self, tm, temp, s=0):#W/m2
         z=self.Level+self.v*tm/60
         if z<=self.Height:
-            if z>self.Zm:
-                self.shrink=450*self.Thb*self.beta_sol*((z-self.Zm)/self.v)**0.5
             if temp>=self.Tsol:
                 self.flux_thickz=self.flux_thick_m*(1+2*(temp-self.Tsol)/self.Tsol)
                 self.Zm=z
-            self.set_level(z)
+            if z>self.Zm:
+                self.shrink=450*self.Thb*self.beta_sol*((z-self.Zm)/self.v)**0.5
             if z>self.Zm:
                 self.flux_thickz=self.flux_thick_m+self.shrink-self.mould_shape(z)+self.mould_shape(self.Zm)
                 if self.flux_thickz<0.0:self.flux_thickz=0.0
@@ -232,8 +238,11 @@ class CCM(HTC):
             self.alfa_wat=self.alfa_watz*(self.Prandtl(self.Twat)/self.Prandtl(self.TempW))**0.25
             alfa=1/self.htc_resist(self.alfa_wat,temp)
             return alfa, self.Twat, alfa*(self.Twat-temp) #mould
-        else: 
-            alfa= 142*(self.SprayDens[s]**0.55)*(1-7.5E-3*self.Tspraywat)*exp(-0.0012*(temp+273))+5.670367E-8*((temp+273)**4-(self.Tair+273)**4)/(temp-self.Tair) #spray
+        elif (self.iz>0 and z-self.SecCool[self.iz-1][0]<self.RollCont/2) or (self.SecCool[self.iz][0]-z<self.RollCont/2):
+            return self.alfa_roll, self.Tair, self.alfa_roll*(self.Tair-temp)                               # under roll
+        else:
+            alfa= 142*(self.SprayDens[s]**0.55)*(1-7.5E-3*self.Tspraywat)*exp(-0.0012*(temp+273)) + self.alfa_nat + \
+                0.8*5.670367E-8*((temp+273)**4-(self.Tair+273)**4)/(temp-self.Tair)                      # spray
             return alfa, self.Tair, alfa*(self.Tair-temp)
 #-----------------------------------------------
 class CCM_MouldWithChannels(CCM):
@@ -254,7 +263,7 @@ class CCM_MouldWithChannels(CCM):
         self.Coating=Coating         # Coating thickness [[axis, m], [thicknes, m]]
         self.Mould_lamda=Mould_lamda # Mould material conductivity, W/mK
         self.Coat_lamda=Coat_lamda   # Coating conductivity, W/mK
-        self.PointList=[0,]          # List of coordinates (s) for htc calculations
+        self.PointList=[0.0,]          # List of coordinates (s) for htc calculations
         self.LogFile=''
 #-----------------------------------------------
 class Circle_tube(CCM):
@@ -274,7 +283,7 @@ class Circle_tube(CCM):
         self.Coating=Coating                                             # Coating thickness [[axis, m], [thicknes, m]]
         self.Mould_lamda=Mould_lamda                                     # Mould material conductivity, W/mK
         self.Coat_lamda=Coat_lamda                                       # Coating conductivity, W/mK
-        self.PointList=[0,]                                              # List of coordinates (s) for htc calculations
+        self.PointList=[0.0,]                                              # List of coordinates (s) for htc calculations
         self.LogFile=''
         self.R=D_billet/2                                                # Radius of billet cross section, m
         self.Wat_thick=Wat_thick                                         # Thickness of water layer, m
@@ -303,7 +312,7 @@ class Rect_tube(CCM):
         self.Coating=Coating         # Coating thickness [[axis, m], [thicknes, m]]
         self.Mould_lamda=Mould_lamda # Mould material conductivity, W/mK
         self.Coat_lamda=Coat_lamda   # Coating conductivity, W/mK
-        self.PointList=[0,]          # List of coordinates (s) for htc calculations
+        self.PointList=[0.0,]          # List of coordinates (s) for htc calculations
         self.LogFile=''
 #--------------------------------------------------------------------
 #-CREEP FUNCTIONS: Stress[MPa]=func(EpsR[1/sec], Temp[C]))-----------
