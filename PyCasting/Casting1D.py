@@ -97,6 +97,8 @@ class Casting1D(Solidification):
         logfile.close()
         while iter_time<FullTime and minTemp<=self.Tlik:
             #----------BCs preparation and output-------------------------
+            self.HTC1.set_level(iter_time)
+            self.HTC2.set_level(iter_time)
             alfa1, T1, Q1 = self.HTC1.htc(iter_time,self.T[self.k1])
             alfa2, T2, Q2 = self.HTC2.htc(iter_time,self.T[self.k2])
             H1=self.FuncTemp(T1)
