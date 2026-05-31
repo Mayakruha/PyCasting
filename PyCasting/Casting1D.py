@@ -57,14 +57,25 @@ class Casting1D(Solidification):
         self.ArrayResList=['Temp [C]',]
         self.k1=0
         self.k2=0
-    def RunCalc(self, FullTime, kj=0.5, Epsilon=0.0001, out_dtau=1):
+    def RunCalc(self, FullTime, kj=0.5, Epsilon=0.0001, out_dtau=0.25):
         # kj-convergence coefficient for thermal calculations
+        # OUTPUT TIME POINTS
+        TPs=list(self.HTC1.TimePoints.union(self.HTC2.TimePoints).union({0,FullTime}))
+        TPs.sort()
+        for i in range(len(TPs)-1):
+            iner_point_num=round((TPs[i+1]-TPs[i])/out_dtau)
+            if iner_point_num>1:
+                dtime=(TPs[i+1]-TPs[i])/iner_point_num
+                for j in range(1, iner_point_num):
+                    TPs.append(j*dtime+TPs[i])
+        TPs.sort()
+        out_iter=0
+        # ---
         self.dtau=kj*self.dX*self.dX*min(self.ro_liq*self.Cl,self.ro_sol**self.Cr)/4/self.lamda  #sek
         self.Epsilon=Epsilon
         self.results=[]
         for Name in self.ScalarResList+self.ArrayResList:
             self.results.append([])
-        out_time=0
         iter_time=0
         minTemp=min(self.T)
         n=len(self.T)                       #!!!!!!!!!
@@ -91,7 +102,7 @@ class Casting1D(Solidification):
         Log_message('Number of  nodes: '+str(n),logfile)
         Log_message('Distance between nodes, mm: '+str(self.dX*1000),logfile)
         Log_message('Step time, sec: '+str(self.dtau),logfile)
-        Log_message('Number of output points: '+str(int(FullTime/out_dtau)),logfile)
+        Log_message('Number of output points: '+str(len(TPs)-1),logfile)
         Log_message('********************************************',logfile)
         Log_message(' Time, sec | Min Temp, C | Thickness, mm | Bulk Temp 1, C | Bulk Temp 2, C | HTC 1, kW/m2K | HTC 2, kW/m2K',logfile)
         logfile.close()
@@ -103,7 +114,7 @@ class Casting1D(Solidification):
             alfa2, T2, Q2 = self.HTC2.htc(iter_time,self.T[self.k2])
             H1=self.FuncTemp(T1)
             H2=self.FuncTemp(T2)
-            if iter_time>=out_time:
+            if iter_time>=TPs[out_iter]:
                 self.results[0].append(iter_time)              # Time [sec] 
                 self.results[1].append(minTemp)                # minTemp [C]
                 self.results[2].append(self.dX*(self.k2-self.k1-1)*1000) # Thickness [mm]
@@ -117,7 +128,7 @@ class Casting1D(Solidification):
                 logfile=open(self.LogFile,'a')
                 Log_message('  {:6.1f}   |    {:6.1f}   |    {:6.2f}     |     {:6.1f}     |     {:6.2f}     |    {:6.3f}     |    {:6.3f}'.format(iter_time, minTemp, self.dX*(self.k2-self.k1-1)*1000, T1, T2, alfa1/1000, alfa2/1000),logfile)
                 logfile.close()
-                out_time+=out_dtau
+                out_iter+=1
             #----------Heat calculation-------------------------
             for i in range(n):
                 if i==0 and self.k1==0 and self.R0==0:
