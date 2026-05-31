@@ -41,7 +41,8 @@ class Solidification:
 #----------Parent HTC class--------------------
 class HTC: 
     def __init__(self):
-        self.LogFile=''    
+        self.LogFile=''
+        self.TimePoints=set()
     def ImportProp(self, lamda, beta_liq, kvis, thdif, Tsol, Tlik, Cl,ro_liq, beta_sol):
         self.lamda=lamda       # conductivity of liqid steel, W/m*K
         self.beta_liq=beta_liq # thermal expansion of luquid steel, 1/K
@@ -91,6 +92,7 @@ class HTC_pool(HTC):
         self.Size=Size/2  # size of bath to calculate temperature
         self.kf=1+Radial
         self.LogFile=''
+        self.TimePoints=set()
     def SetParams(self, v, Zm, Tbulk, htc_tab=[[0,12.0],[2000.0,2000.0]]):
         self.v=v             # Casting speed [m/min]
         self.Level=Zm        # Level [m]
@@ -125,6 +127,17 @@ class CCM(HTC):
             return qavrg*(1-x**kw)*exp(-4.6*abs(z-z0)/L/tan(fi/2))
         else:
             return 0
+    def Gen_Init(self):
+        self.TimePoints=set()
+        self.Zones={}
+        for part in self.SecCool:
+            for ZoneName in part[2]:
+                if not ZoneName in self.Zones:
+                    self.Zones[ZoneName]=[0,0,''] # Number of nozzles; Nozzle flow , l/min; Nozzle Name
+                self.Zones[ZoneName][0]+=len(part[2][ZoneName])
+        for NozzleName in self.Nozzles:
+            for ZoneName in self.Nozzles[NozzleName][3]:
+                self.Zones[ZoneName][2]=NozzleName
     def Prandtl(self,Temp):
         return 12*exp(-0.036*Temp)+1.336343
     def geom_coeff(self,Pr):
@@ -134,7 +147,7 @@ class CCM(HTC):
         elif T<self.flux_Tmelt: return self.flux_alfa_sol
         else: return (T-self.flux_Tmelt)/(self.flux_Tliq-self.flux_Tmelt)*(self.flux_alfa_liq-self.flux_alfa_sol)+self.flux_alfa_sol
     def SetParams(self, v, Zm,  Qwat_mould, Taper, Qwat_spray, Twat_in=20, Tair=20, Tspraywat=20, flux_Tmelt=1115, flux_Tliq=1145,
-                  flux_lamda=1.5, flux_alfa_liq=5900, flux_alfa_sol=1200, RollCont=0.005, alfa_roll=500, alfa_nat=15):
+                  flux_lamda=1.5, flux_alfa_liq=5900, flux_alfa_sol=1200, alfa_roll=500, alfa_nat=15):
         self.v=v                          # Casting speed [m/min]
         self.Level=Zm                     # Level [m]
         self.Qwat_mould=Qwat_mould        # Water flow in the mould [l/min]
@@ -148,7 +161,6 @@ class CCM(HTC):
         self.flux_lamda=flux_lamda        # flux conductivity, W/mK
         self.flux_alfa_liq=flux_alfa_liq  # HTC for luquid flux, W/m2*K
         self.flux_alfa_sol=flux_alfa_sol  # HTC for solid flux, W/m2*K
-        self.RollCont=RollCont            # Width of contact between a roll and a billet, m
         self.alfa_roll=alfa_roll          # Contact htc under rolls, W/m2*K
         self.alfa_nat=alfa_nat            # Natural htc, W/m2*K
         self.Zm=Zm
@@ -165,25 +177,24 @@ class CCM(HTC):
         Log_message('Nominal HTC, kW/(m2K): '+str(self.alfa_wat0/1000), logfile)
         Log_message('Solid flux thickness at meniscus, mm: '+str(self.flux_thick_m*1000), logfile)
         self.iz=0
-        self.RollDist=self.SecCool[self.iz][0]-self.Height-self.RollCont/2
+        self.RollDist=self.SecCool[self.iz][0]-self.Height-self.SecCool[self.iz][1]/2
         self.Nozzle_z=self.Height+self.RollDist/2
-        self.Zones={}
-        for part in self.SecCool:
-            for nozzle in part[1]:
-                if not nozzle[1] in self.Zones:
-                    self.Zones[nozzle[1]]=[0,0,''] # Number of nozzles; Nozzle flow , l/min; Nozzle Name
-                self.Zones[nozzle[1]][0]+=1
-        for NozzleName in self.Nozzles:
-            for ZoneName in self.Nozzles[NozzleName][3]:
-                self.Zones[ZoneName][2]=NozzleName
         Log_message('\n** Heat transfer parameters in the second cooling system', logfile)
         for ZoneName in self.Zones:
             Log_message('Zone '+ZoneName+':', logfile)
             Log_message('  Nozzle: '+self.Zones[ZoneName][2], logfile)
             Log_message('  Number of nozzles '+str(self.Zones[ZoneName][0])+':', logfile)
             self.Zones[ZoneName][1]=self.Qwat_spray[ZoneName]/self.Zones[ZoneName][0]
-            Log_message('  Water flow for a nozzle, l/min: '+str(self.Zones[ZoneName][1]), logfile)
+            Log_message('  Water flow for a nozzle, l/min: '+str(self.Zones[ZoneName][1]), logfile)        
         logfile.close()
+        self.TimePoints.clear()
+        self.TimePoints.add(0)
+        self.TimePoints.add((self.Height-Zm)/v*60)
+        for part in self.SecCool:
+            self.TimePoints.add((part[0]-Zm)/v*60)
+            if part[1]!=0:
+                self.TimePoints.add((part[0]-part[1]/2-Zm)/v*60)
+                self.TimePoints.add((part[0]+part[1]/2-Zm)/v*60)
     def set_level(self, tm):
         z=self.Level+self.v*tm/60
         if z<=self.Height:
@@ -204,14 +215,15 @@ class CCM(HTC):
                 Flag=True
             # -----spray parameters
             if Flag:
-                self.RollDist=self.SecCool[self.iz][0]-self.SecCool[self.iz-1][0]-self.RollCont
-                self.Nozzle_z=self.SecCool[self.iz-1][0]+self.RollDist/2+self.RollCont/2
-            if (self.iz>0 and z-self.SecCool[self.iz-1][0]>self.RollCont/2) or (self.SecCool[self.iz][0]-z>self.RollCont/2):
-                for NozzlePar in self.SecCool[self.iz][1]:                
-                    NozzleName=self.Zones[NozzlePar[1]][2]
-                    for i, s in enumerate(self.PointList):
-                        self.SprayDens[s]+=self.NozzleDens(s, z, self.Nozzle_z, self.Nozzles[NozzleName][0], self.RollDist, self.Zones[NozzlePar[1]][1],
-                                           s0=NozzlePar[0], kw=self.Nozzles[NozzleName][1], fi=self.Nozzles[NozzleName][2])
+                self.RollDist=self.SecCool[self.iz][0]-self.SecCool[self.iz-1][0]-self.SecCool[self.iz][1]/2-self.SecCool[self.iz-1][1]/2
+                self.Nozzle_z=self.SecCool[self.iz-1][0]+self.RollDist/2+self.SecCool[self.iz-1][1]/2
+            if (self.iz>0 and z-self.SecCool[self.iz-1][0]>self.SecCool[self.iz-1][1]/2) or (self.SecCool[self.iz][0]-z>self.SecCool[self.iz][1]/2):
+                for ZoneName in self.SecCool[self.iz][2]:                
+                    NozzleName=self.Zones[ZoneName][2]
+                    for s0 in self.SecCool[self.iz][2][ZoneName]:
+                        for i, s in enumerate(self.PointList):
+                            self.SprayDens[s]+=self.NozzleDens(s, z, self.Nozzle_z, self.Nozzles[NozzleName][0], self.RollDist, self.Zones[ZoneName][1],
+                                               s0=s0, kw=self.Nozzles[NozzleName][1], fi=self.Nozzles[NozzleName][2])
     def mould_shape(self,z):#m
         return self.Taper*z/self.Height+np.interp(z,self.Shape[0],self.Shape[1])
     def HeatUp(self, J, tm, move): # J - average energy density [J/m2], tm - time [sec], move - movement of border [m]
@@ -238,7 +250,7 @@ class CCM(HTC):
             self.alfa_wat=self.alfa_watz*(self.Prandtl(self.Twat)/self.Prandtl(self.TempW))**0.25
             alfa=1/self.htc_resist(self.alfa_wat,temp)
             return alfa, self.Twat, alfa*(self.Twat-temp) #mould
-        elif (self.iz>0 and z-self.SecCool[self.iz-1][0]<self.RollCont/2) or (self.SecCool[self.iz][0]-z<self.RollCont/2):
+        elif (self.iz>0 and z-self.SecCool[self.iz-1][0]<self.SecCool[self.iz-1][1]/2) or (self.SecCool[self.iz][0]-z<self.SecCool[self.iz][1]/2):
             return self.alfa_roll, self.Tair, self.alfa_roll*(self.Tair-temp)                               # under roll
         else:
             alfa= 142*(self.SprayDens[s]**0.55)*(1-7.5E-3*self.Tspraywat)*exp(-0.0012*(temp+273)) + self.alfa_nat + \
@@ -257,14 +269,15 @@ class CCM_MouldWithChannels(CCM):
         self.Wat_sec=Nch*Sch         # Summary cross section of cooling channels, m2
         self.Mould_thick=Mould_thick # Distance between water and mould surface, m
         self.Thb=Taper_size/2        # Size of billet to calculate gap due to shrinkage
-        self.Nozzles=Nozzles         # Nozzles parameters - {Name:[W, kw, fi, Zones list]}
-        self.SecCool=SecCool         # Second cooling parameters - [[roll z-coordinate,[[s0, Zone name],...]],...]
+        self.Nozzles=Nozzles         # Nozzles parameters - {Nozzle Name:[W, kw, fi, Zones list]}
+        self.SecCool=SecCool         # Second cooling parameters - [[max z-coordinate, contact width, {Zone name:[s0,s1,..],}],...]
         self.Shape=Shape             # Shape of mould surface - deflection inside, [[axis,m], [deflection,m]] 
         self.Coating=Coating         # Coating thickness [[axis, m], [thicknes, m]]
         self.Mould_lamda=Mould_lamda # Mould material conductivity, W/mK
         self.Coat_lamda=Coat_lamda   # Coating conductivity, W/mK
-        self.PointList=[0.0,]          # List of coordinates (s) for htc calculations
+        self.PointList=[0.0,]        # List of coordinates (s) for htc calculations
         self.LogFile=''
+        self.Gen_Init()
 #-----------------------------------------------
 class Circle_tube(CCM):
     def __init__(self, Height, D_billet, Wat_thick, Mould_thick, Nozzles, SecCool,
@@ -278,15 +291,16 @@ class Circle_tube(CCM):
         self.Mould_thick=Mould_thick                                     # Distance between water and mould surface, m
         self.Thb=D_billet/2                                              # Size of billet to calculate gap due to shrinkage
         self.Nozzles=Nozzles                                             # Nozzles parameters - {Name:[W, kw, fi, Zones list]}
-        self.SecCool=SecCool                                             # Second cooling parameters - [[roll z-coordinate,[[s0, Zone name],...]],...]
+        self.SecCool=SecCool                                             # Second cooling parameters - [[max z-coordinate, contact width, {Zone name:[s0,s1,..],}],...]
         self.Shape=Shape                                                 # Shape of mould surface - deflection inside, [[axis,m], [deflection,m]] 
         self.Coating=Coating                                             # Coating thickness [[axis, m], [thicknes, m]]
         self.Mould_lamda=Mould_lamda                                     # Mould material conductivity, W/mK
         self.Coat_lamda=Coat_lamda                                       # Coating conductivity, W/mK
-        self.PointList=[0.0,]                                              # List of coordinates (s) for htc calculations
+        self.PointList=[0.0,]                                            # List of coordinates (s) for htc calculations
         self.LogFile=''
         self.R=D_billet/2                                                # Radius of billet cross section, m
         self.Wat_thick=Wat_thick                                         # Thickness of water layer, m
+        self.Gen_Init()
     def geom_coeff(self, Pr):
         return (1-0.45/(2.4+Pr))*(1+self.Wat_thick/(self.R+self.Mould_thick))**(0.16/Pr**0.15)
     def mould_resist(self, alfa_wat):
@@ -307,13 +321,14 @@ class Rect_tube(CCM):
         self.Mould_thick=Mould_thick # Distance between water and mould surface, m
         self.Thb=Th_billet/2         # Size of billet to calculate gap due to shrinkage
         self.Nozzles=Nozzles         # Nozzles parameters - {Name:[W, kw, fi, Zones list]}
-        self.SecCool=SecCool         # Second cooling parameters - [[roll z-coordinate,[[s0, Zone name],...]],...]
+        self.SecCool=SecCool         # Second cooling parameters - [[max z-coordinate, contact width, {Zone name:[s0,s1,..],}],...]
         self.Shape=Shape             # Shape of mould surface - deflection inside, [[axis,m], [deflection,m]] 
         self.Coating=Coating         # Coating thickness [[axis, m], [thicknes, m]]
         self.Mould_lamda=Mould_lamda # Mould material conductivity, W/mK
         self.Coat_lamda=Coat_lamda   # Coating conductivity, W/mK
-        self.PointList=[0.0,]          # List of coordinates (s) for htc calculations
+        self.PointList=[0.0,]        # List of coordinates (s) for htc calculations
         self.LogFile=''
+        self.Gen_Init()
 #--------------------------------------------------------------------
 #-CREEP FUNCTIONS: Stress[MPa]=func(EpsR[1/sec], Temp[C]))-----------
 #--------------------------------------------------------------------
