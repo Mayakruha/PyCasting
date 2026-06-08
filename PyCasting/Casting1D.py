@@ -289,7 +289,7 @@ class Casting1D(Solidification):
 #---------------------------------
 #--------FUNCTIONS----------------
 #---------------------------------
-def output_solid_vtu(FileName, model):
+def output_vtu(FileName, model):
     indx=len(model.ScalarResList)
     Points=vtk.vtkPoints()
     mesh=vtk.vtkUnstructuredGrid()
@@ -300,14 +300,13 @@ def output_solid_vtu(FileName, model):
     for i in range(len(model.results[indx])-1):
         Dict_nodes[(i+1)]={}
         for j in range(len(model.results[indx][i])-1):
-            if model.results[indx][i][j]<model.Tsol and model.results[indx][i][j+1]<model.Tsol and model.results[indx][(i+1)][j]<model.Tsol and model.results[indx][(i+1)][j+1]<model.Tsol:
-                for i1 in range(2):
-                    for j1 in range(2):
-                        if not j+j1 in Dict_nodes[(i+i1)]:
-                            Dict_nodes[(i+i1)][j+j1]=node
-                            Points.InsertNextPoint((j+j1)*model.dX,model.results[0][i+i1],0)
-                            node+=1
-                cells.append((Dict_nodes[i][j],Dict_nodes[(i+1)][j],Dict_nodes[(i+1)][j+1],Dict_nodes[i][j+1]))
+            for i1 in range(2):
+                for j1 in range(2):
+                    if not j+j1 in Dict_nodes[(i+i1)]:
+                        Dict_nodes[(i+i1)][j+j1]=node
+                        Points.InsertNextPoint((j+j1)*model.dX,model.results[0][i+i1],0)
+                        node+=1
+            cells.append((Dict_nodes[i][j],Dict_nodes[(i+1)][j],Dict_nodes[(i+1)][j+1],Dict_nodes[i][j+1]))
     mesh.Allocate(len(cells))
     mesh.SetPoints(Points)
     for cell in cells:
