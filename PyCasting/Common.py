@@ -6,10 +6,10 @@ import sys
 #---------------------------------
 class Solidification:
     #-----------steel properties----------------------
-    def CalcMaterialProp(self,C=0.0,Mn=0.0,Si=0.0,P=0.0,S=0.0,Al=0.0,Cu=0.0,Ni=0.0,Cr=0.0,N=0.0):
+    def CalcMaterialProp(self,C=0.0001,Mn=0.0,Si=0.0,P=0.0,S=0.0,Al=0.0,Cu=0.0,Ni=0.0,Cr=0.0,N=0.0):
         #----------chemical compound of steel, %--------------------------
         self.Tsol=1536-(200*C+16*Si+6*Mn+1.7*Cr+3.9*Ni+93*P+1100*S)             #Solidus temperatere, Celsius
-        self.Tlik=1535.1-(88*C+8*Si+5*Mn+1.5*Cr+4*Ni+5*Cu+3*Al+30*P+25*S+80*N)  #Liquidus temperature, Celsius
+        self.Tlik=1536-(78*C+7.6*Si+4.9*Mn+1.3*Cr+3.1*Ni+4.7*Cu+3.6*Al+34.4*P+38*S)  #Liquidus temperature, Celsius
         self.beta_liq=0.000031 # thermal expansion of luquid steel, 1/K
         self.beta_sol=(2.7-0.16*C+0.039*Mn-0.1*Si-0.019*Cr-0.016*Ni-0.5*P-0.25*S)/140000 # thermal expansion of solid steel, 1/K
         self.kvis=7.91E-7    # kinematic viscosity of luquid steel, m2/sec
