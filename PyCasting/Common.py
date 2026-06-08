@@ -6,7 +6,7 @@ import sys
 #---------------------------------
 class Solidification:
     #-----------steel properties----------------------
-    def CalcMaterialProp(self,C=0.0001,Mn=0.0,Si=0.0,P=0.0,S=0.0,Al=0.0,Cu=0.0,Ni=0.0,Cr=0.0,N=0.0):
+    def CalcMaterialProp(self,C=0.0,Mn=0.0,Si=0.0,P=0.0,S=0.0,Al=0.0,Cu=0.0,Ni=0.0,Cr=0.0,N=0.0):
         #----------chemical compound of steel, %--------------------------
         self.Tsol=1536-(200*C+16*Si+6*Mn+1.7*Cr+3.9*Ni+93*P+1100*S)             #Solidus temperatere, Celsius
         self.Tlik=1535.1-(88*C+8*Si+5*Mn+1.5*Cr+4*Ni+5*Cu+3*Al+30*P+25*S+80*N)  #Liquidus temperature, Celsius
