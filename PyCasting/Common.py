@@ -1,5 +1,6 @@
 from math import exp, log, tan, pi
 import numpy as np
+import sys
 #---------------------------------
 #-----SOLIDIFICATION CLASS--------
 #---------------------------------
@@ -110,21 +111,28 @@ class HTC_pool(HTC):
     def HeatUp(self, J, tm, move): # J - average energy density [J/m2], tm - time [sec], move - movement of border [m]
         self.X0=self.Size+move # current length 
         if self.X0>0: self.Tbulk-=self.kf*J/self.Cl/self.ro_liq/self.X0
+#--------------------------------------------------------------------
+#-HTC SPRAY FUNCTIONS: HTC[W/m2K]=func(Val, Tspraywat[C], temp[C])---
+#--------------------------------------------------------------------
+def Nozaki(Val, Tspraywat, temp): # Val [l/min/m2]
+    return 142*(Val**0.55)*(1-7.5E-3*Tspraywat)*exp(-0.0012*(temp+273))
+def DirectHTC(Val, Tspraywat, temp): # Val [W/m2K]
+    return Val
 #-----------------------------------------------
 #----------CCM HTC classes----------------------
 #----General class for CCM----------------------
 class CCM(HTC):
-    def NozzleDens(self,s, z, z0, W, L, Qwat, s0, kw, fi):
+    def NozzleDens(self,s, z, z0, W, L, Val_avrg, s0, kw, fi):
         """return water density, l/m2*min
-            s, z - coordinates, m;  s0, z0 - coordinates of nozzel center, m
-            W, L - width and length of spray zone, m
-            Qwat - water flow, l/min
-            kw, fi - define water distribution
+            s, z     - coordinates, m;  s0, z0 - coordinates of nozzel center, m
+            W, L     - width and length of spray zone, m
+            Val_avrg - average value
+            kw, fi   - define water distribution
         """
         x=2*abs(s-s0)/W
         if x<1:
-            qavrg=(1+1/kw)*2.3*Qwat / W / L / tan(fi/2) / (1-exp(-2.3/tan(fi/2)))
-            return qavrg*(1-x**kw)*exp(-4.6*abs(z-z0)/L/tan(fi/2))
+            Val0=(1+1/kw)*2.3 / tan(fi/2) / (1-exp(-2.3/tan(fi/2)))*Val_avrg
+            return Val0*(1-x**kw)*exp(-4.6*abs(z-z0)/L/tan(fi/2))
         else:
             return 0
     def Gen_Init(self):
@@ -133,7 +141,7 @@ class CCM(HTC):
         for part in self.SecCool:
             for ZoneName in part[2]:
                 if not ZoneName in self.Zones:
-                    self.Zones[ZoneName]=[0,0,''] # Number of nozzles; Nozzle flow , l/min; Nozzle Name
+                    self.Zones[ZoneName]=[0,0,''] # Number of nozzles; Nozzle flow, l/min or average HTC, W/m2K; Nozzle Name
                 self.Zones[ZoneName][0]+=len(part[2][ZoneName])
         for NozzleName in self.Nozzles:
             for ZoneName in self.Nozzles[NozzleName][3]:
@@ -146,13 +154,14 @@ class CCM(HTC):
         if T>self.flux_Tliq: return self.flux_alfa_liq
         elif T<self.flux_Tmelt: return self.flux_alfa_sol
         else: return (T-self.flux_Tmelt)/(self.flux_Tliq-self.flux_Tmelt)*(self.flux_alfa_liq-self.flux_alfa_sol)+self.flux_alfa_sol
-    def SetParams(self, v, Zm,  Qwat_mould, Taper, Qwat_spray, Twat_in=20, Tair=20, Tspraywat=20, flux_Tmelt=1115, flux_Tliq=1145,
-                  flux_lamda=1.5, flux_alfa_liq=5900, flux_alfa_sol=1200, alfa_roll=500, alfa_nat=15):
+    def SetParams(self, v, Zm,  Qwat_mould, Taper, Qwat_spray, data_type='flow', Twat_in=20, Tair=20, Tspraywat=20, flux_Tmelt=1115,
+                  flux_Tliq=1145, flux_lamda=1.5, flux_alfa_liq=5900, flux_alfa_sol=1200, alfa_roll=500, alfa_nat=15, HTCSpray_func=Nozaki):
         self.v=v                          # Casting speed [m/min]
         self.Level=Zm                     # Level [m]
         self.Qwat_mould=Qwat_mould        # Water flow in the mould [l/min]
         self.Taper=Taper                  # taper of a side over height, m
-        self.Qwat_spray=Qwat_spray        # Water flow in the spray zone - {zone name: water flux, l/min}
+        self.Qwat_spray=Qwat_spray        # Water flow in the spray zone - {zone name: water flux, l/min or htc, W/m2K}
+        self.data_type=data_type          # 'flow' if Qwat_spray={zone name: water flux, l/min}; 'htc' if Qwat_spray={zone name: htc, W/m2K};
         self.Twat=Twat_in                 # Temperature of water [Celsius]
         self.Tair=Tair                    # Temperature of air [Celsius]
         self.Tspraywat=Tspraywat          # Temperature of water in the spray system [Celsius]
@@ -163,6 +172,7 @@ class CCM(HTC):
         self.flux_alfa_sol=flux_alfa_sol  # HTC for solid flux, W/m2*K
         self.alfa_roll=alfa_roll          # Contact htc under rolls, W/m2*K
         self.alfa_nat=alfa_nat            # Natural htc, W/m2*K
+        self.HTCSpray_func=HTCSpray_func  # Function to provide HTC from spray, W/m2*K
         self.Zm=Zm
         self.shrink=0
         self.v_wat=self.Qwat_mould/60000/self.Wat_sec # m/sec
@@ -184,8 +194,16 @@ class CCM(HTC):
             Log_message('Zone '+ZoneName+':', logfile)
             Log_message('  Nozzle: '+self.Zones[ZoneName][2], logfile)
             Log_message('  Number of nozzles '+str(self.Zones[ZoneName][0])+':', logfile)
-            self.Zones[ZoneName][1]=self.Qwat_spray[ZoneName]/self.Zones[ZoneName][0]
-            Log_message('  Water flow for a nozzle, l/min: '+str(self.Zones[ZoneName][1]), logfile)        
+            if self.data_type=='flow':
+                self.Zones[ZoneName][1]=self.Qwat_spray[ZoneName]/self.Zones[ZoneName][0]
+                Log_message('  Water flow for a nozzle, l/min: '+str(self.Zones[ZoneName][1]), logfile)
+            elif self.data_type=='htc':
+                self.Zones[ZoneName][1]=self.Qwat_spray[ZoneName]
+                Log_message('  Average HTC for a nozzle, W/m2K: '+str(self.Zones[ZoneName][1]), logfile)
+            else:
+                Log_message('***ERROR: data_type is specified incorrectly', logfile)
+                logfile.close()
+                sys.exit()
         logfile.close()
         self.TimePoints.clear()
         self.TimePoints.add(0)
@@ -207,8 +225,8 @@ class CCM(HTC):
             self.alfa_watz=self.alfa_wat0*(1+self.deff/z/2)
             self.Coat_thick=np.interp(z, self.Coating[0],self.Coating[1])
         else:
-            self.SprayDens={}
-            for s in self.PointList:self.SprayDens[s]=0.0
+            self.FullDistr={}
+            for s in self.PointList:self.FullDistr[s]=0.0
             Flag=False
             while z>self.SecCool[self.iz][0] and self.iz<len(self.SecCool)-1:
                 self.iz+=1
@@ -218,11 +236,15 @@ class CCM(HTC):
                 self.RollDist=self.SecCool[self.iz][0]-self.SecCool[self.iz-1][0]-self.SecCool[self.iz][1]/2-self.SecCool[self.iz-1][1]/2
                 self.Nozzle_z=self.SecCool[self.iz-1][0]+self.RollDist/2+self.SecCool[self.iz-1][1]/2
             if (self.iz>0 and z-self.SecCool[self.iz-1][0]>self.SecCool[self.iz-1][1]/2) or (self.SecCool[self.iz][0]-z>self.SecCool[self.iz][1]/2):
-                for ZoneName in self.SecCool[self.iz][2]:                
+                for ZoneName in self.SecCool[self.iz][2]:
                     NozzleName=self.Zones[ZoneName][2]
+                    if self.data_type=='flow':
+                        Val_avrg=self.Zones[ZoneName][1]/self.Nozzles[NozzleName][0]/self.RollDist
+                    elif  self.data_type=='htc':
+                        Val_avrg=self.Zones[ZoneName][1]
                     for s0 in self.SecCool[self.iz][2][ZoneName]:
                         for i, s in enumerate(self.PointList):
-                            self.SprayDens[s]+=self.NozzleDens(s, z, self.Nozzle_z, self.Nozzles[NozzleName][0], self.RollDist, self.Zones[ZoneName][1],
+                            self.FullDistr[s]+=self.NozzleDens(s, z, self.Nozzle_z, self.Nozzles[NozzleName][0], self.RollDist, Val_avrg,
                                                s0=s0, kw=self.Nozzles[NozzleName][1], fi=self.Nozzles[NozzleName][2])
     def mould_shape(self,z):#m
         return self.Taper*z/self.Height+np.interp(z,self.Shape[0],self.Shape[1])
@@ -253,8 +275,7 @@ class CCM(HTC):
         elif (self.iz>0 and z-self.SecCool[self.iz-1][0]<self.SecCool[self.iz-1][1]/2) or (self.SecCool[self.iz][0]-z<self.SecCool[self.iz][1]/2):
             return self.alfa_roll, self.Tair, self.alfa_roll*(self.Tair-temp)                               # under roll
         else:
-            alfa= 142*(self.SprayDens[s]**0.55)*(1-7.5E-3*self.Tspraywat)*exp(-0.0012*(temp+273)) + self.alfa_nat + \
-                0.8*5.670367E-8*((temp+273)**4-(self.Tair+273)**4)/(temp-self.Tair)                      # spray
+            alfa= self.HTCSpray_func(self.FullDistr[s],self.Tspraywat,temp)+self.alfa_nat+ 0.8*5.670367E-8*((temp+273)**4-(self.Tair+273)**4)/(temp-self.Tair)  # spray
             return alfa, self.Tair, alfa*(self.Tair-temp)
 #-----------------------------------------------
 class CCM_MouldWithChannels(CCM):
