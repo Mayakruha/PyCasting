@@ -43,8 +43,10 @@ class Casting1D(Solidification):
         Log_message('** Model preparation has started',logfile)
         logfile.close()
         self.HTC1=HTC1       # htc class
+        self.HTC1.Port_In=self.Port_Out
         self.HTC1.LogFile=LogFile
         self.HTC2=HTC2       # htc class
+        self.HTC2.Port_In=self.Port_Out
         self.HTC2.LogFile=LogFile
         self.Dim=Dim
         self.n=n
@@ -304,7 +306,7 @@ def output_vtu(FileName, model):
                 for j1 in range(2):
                     if not j+j1 in Dict_nodes[(i+i1)]:
                         Dict_nodes[(i+i1)][j+j1]=node
-                        Points.InsertNextPoint((j+j1)*model.dX,model.results[0][i+i1],0)
+                        Points.InsertNextPoint((j+j1)*model.dX,0,model.results[0][i+i1])
                         node+=1
             cells.append((Dict_nodes[i][j],Dict_nodes[(i+1)][j],Dict_nodes[(i+1)][j+1],Dict_nodes[i][j+1]))
     mesh.Allocate(len(cells))
