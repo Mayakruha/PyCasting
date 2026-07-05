@@ -22,8 +22,8 @@ class Solidification:
         self.Cl=680          # heat capacity for liquid steel, J/kg*K
         self.Cr=795          # heat capacity for solid steel, J/kg*K
         self.Hl=(self.ro_liq*self.Cl+self.ro_sol*self.Cr)*(self.Tlik-self.Tsol)/2+(self.ro_liq+self.ro_sol)*self.L/2 #J/m3
-        self.HTC1.ImportProp(self.lamda_liq, self.beta_liq, self.kvis, self.thdif, self.Tsol, self.Tlik, self.Cl, self.ro_liq, self.beta_sol)
-        self.HTC2.ImportProp(self.lamda_liq, self.beta_liq, self.kvis, self.thdif, self.Tsol, self.Tlik, self.Cl, self.ro_liq, self.beta_sol) 
+    def Port_Out(self):
+        return self.lamda_liq, self.beta_liq, self.kvis, self.thdif, self.Tsol, self.Tlik, self.Cl, self.ro_liq, self.beta_sol
     def Cef(self,Temp):
         if Temp<self.Tsol: return self.Cr
         elif Temp>self.Tlik: return self.Cl
@@ -44,16 +44,18 @@ class HTC:
     def __init__(self):
         self.LogFile=''
         self.TimePoints=set()
-    def ImportProp(self, lamda, beta_liq, kvis, thdif, Tsol, Tlik, Cl,ro_liq, beta_sol):
-        self.lamda=lamda       # conductivity of liqid steel, W/m*K
-        self.beta_liq=beta_liq # thermal expansion of luquid steel, 1/K
-        self.kvis=kvis         # kinematic viscosity of luquid steel, m2/sec
-        self.thdif=thdif       # thermal diffusivity of luquid steel, m2/sec
-        self.Tsol=Tsol         # Solidus temperatere, Celsius
-        self.Tlik=Tlik         # Liqidus temperatere, Celsius
-        self.Cl=Cl             # heat capacity for liquid steel, J/kg*K
-        self.ro_liq=ro_liq     #liquid steel density, kg/m3
-        self.beta_sol=beta_sol # thermal expansion of solid steel, 1/K
+    def Port_In(self):
+        pass
+#    Import the following:
+#        self.lamda=lamda       # conductivity of liqid steel, W/m*K
+#        self.beta_liq=beta_liq # thermal expansion of luquid steel, 1/K
+#        self.kvis=kvis         # kinematic viscosity of luquid steel, m2/sec
+#        self.thdif=thdif       # thermal diffusivity of luquid steel, m2/sec
+#        self.Tsol=Tsol         # Solidus temperatere, Celsius
+#        self.Tlik=Tlik         # Liqidus temperatere, Celsius
+#        self.Cl=Cl             # heat capacity for liquid steel, J/kg*K
+#        self.ro_liq=ro_liq     #liquid steel density, kg/m3
+#        self.beta_sol=beta_sol # thermal expansion of solid steel, 1/K
     def set_level(self, tm):
         pass
     def htc(self, tm, temp, s=0): # tm - time [sec], temp - temperature [C], surface coordinate [m]
@@ -77,7 +79,8 @@ class HTC_tab(HTC):
 class HTC_nat_conv(HTC):    
     def SetParams(self, Tmet, Length):
         self.Tmet=Tmet     # function (tm) returns metal temparature over time
-        self.Length=Length # function (tm) returns length over time        
+        self.Length=Length # function (tm) returns length over time
+        self.lamda_liq, self.beta_liq, self.kvis, self.thdif, self.Tsol, self.Tlik, self.Cl, self.ro_liq, self.beta_sol = self.Port_In()
     def htc(self, tm, temp, s=0):
         if self.Tmet(tm)<=temp:
             return 0, self.Tmet(tm)
@@ -100,6 +103,7 @@ class HTC_pool(HTC):
         self.Tbulk=Tbulk     # current temeprature        
         self.htc_tab=htc_tab # table with two rows [[z,m];[HTC, W/m2K]]
         self.X0=self.Size
+        self.lamda_liq, self.beta_liq, self.kvis, self.thdif, self.Tsol, self.Tlik, self.Cl, self.ro_liq, self.beta_sol = self.Port_In()
     def htc(self, tm, temp, s=0):
         z=self.Level+self.v*tm/60        
         if self.X0<=0:
@@ -172,10 +176,12 @@ class CCM(HTC):
         self.flux_alfa_sol=flux_alfa_sol  # HTC for solid flux, W/m2*K
         self.alfa_roll=alfa_roll          # Contact htc under rolls, W/m2*K
         self.alfa_nat=alfa_nat            # Natural htc, W/m2*K
-        self.HTCSpray_func=HTCSpray_func  # Function to provide HTC from spray, W/m2*K
+        if data_type=='flow': self.HTCSpray_func=HTCSpray_func  # Function to provide HTC from spray flow, W/m2*K
+        elif data_type=='htc': self.HTCSpray_func=DirectHTC
         self.Zm=Zm
         self.shrink=0
         self.v_wat=self.Qwat_mould/60000/self.Wat_sec # m/sec
+        self.lamda_liq, self.beta_liq, self.kvis, self.thdif, self.Tsol, self.Tlik, self.Cl, self.ro_liq, self.beta_sol = self.Port_In()
         self.set_level(self.Zm)                       # Calculate: Pr, Re, alfa_wat0, Rm, alfa_watz
         self.flux_thick_m=self.flux_lamda*((self.flux_Tmelt-self.Twat)/self.flux_alfa(self.Tsol)/self.v**0.8/(self.Tsol-self.flux_Tmelt)-self.mould_resist(self.alfa_watz))
         if self.flux_thick_m<0.0: self.flux_thick_m=0.0
