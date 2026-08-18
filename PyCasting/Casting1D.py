@@ -3,7 +3,7 @@
 #-Create Casting1D object
 #-CalcMaterilaProp(C=0.0,....)
 #-Apply initial conditions
-#-RunCalc()
+#-RunThermCalc()
 #-RunShrinkage()
 #
 import numpy as np
@@ -22,8 +22,8 @@ def meniscus(model, T0):
     model.k1=model.n-1
     model.k2=model.n
 def coldplate(model, Tcld, thick):
-    model.k1=int((model.Dim-thick)/2/model.dX)
-    model.k2=int((model.Dim+thick)/2/model.dX)
+    model.k1=int((model.Size-thick)/2/model.dX)
+    model.k2=int((model.Size+thick)/2/model.dX)
     alfa1, T1 = model.HTC1.htc(0, Tcld)
     alfa2, T2 = model.HTC2.htc(0, Tcld)
     for i in range(len(model.T)):
@@ -36,7 +36,8 @@ def coldplate(model, Tcld, thick):
 #------------------------------------------
 #-------------Casting class----------------
 class Casting1D(Solidification):
-    def __init__(self, HTC1, HTC2, Dim, n=100, Radial=False, R0=0, LogFile='Casting1D.log', Rewrite=True):
+    def __init__(self, HTC1, HTC2, Size, n=100, Radial=False, R0=0, LogFile='Casting1D.log', Rewrite=True):
+        '''Size - half of thickness [m]'''
         self.LogFile=LogFile
         if Rewrite: logfile=open(LogFile,'w')
         else: logfile=open(LogFile,'a')
@@ -48,19 +49,19 @@ class Casting1D(Solidification):
         self.HTC2=HTC2       # htc class
         self.HTC2.Port_In=self.Port_Out
         self.HTC2.LogFile=LogFile
-        self.Dim=Dim
+        self.Size=Size
         self.n=n
         self.R0=R0           # initial radius is used if Radial=True
-        self.dX=(Dim-R0)/n
+        self.dX=(Size-R0)/n
         self.T=np.zeros(n+1)
         self.RadFlg=Radial   # type of analysis. If True - radial
         self.ScalarResList=['Time [sec]', 'minTemp [C]', 'Thickness [mm]', 'BulkTemp1 [C]', 'HTC1 [W/m2K]', 'Flux1 [W/m2]',
                'BulkTemp2 [C]', 'HTC2 [W/m2K]', 'Flux2 [W/m2]']
-        self.ArrayResList=['Temp [C]',]
+        self.BodyResList=['Temp [C]',]
         self.k1=0
         self.k2=0
-    def RunCalc(self, FullTime, kj=0.5, Epsilon=0.0001, out_dtau=0.25):
-        # kj-convergence coefficient for thermal calculations
+    def RunThermCalc(self, FullTime, kj=0.5, Epsilon=0.0001, out_dtau=0.25):
+        '''kj-convergence coefficient for thermal calculations'''
         # OUTPUT TIME POINTS
         TPs=list(self.HTC1.TimePoints.union(self.HTC2.TimePoints).union({0,FullTime}))
         TPs.sort()
@@ -75,19 +76,21 @@ class Casting1D(Solidification):
         # ---
         self.dtau=kj*self.dX*self.dX*min(self.ro_liq*self.Cl,self.ro_sol**self.Cr)/4/self.lamda  #sek
         self.Epsilon=Epsilon
-        self.results=[]
-        for Name in self.ScalarResList+self.ArrayResList:
-            self.results.append([])
+        self.ScalarResults=[]
+        for Name in self.ScalarResList:
+            self.ScalarResults.append([])
+        for Name in self.BodyResList:
+            self.BodyResults.append([])
         iter_time=0
         minTemp=min(self.T)
         n=len(self.T)                       #!!!!!!!!!
         H=np.zeros(n)
         for i in range(n):
             if i==self.k1 and self.k1!=0:
-                alfa1, T1, Q1 = self.HTC1.htc(iter_time,self.T[self.k1])
+                alfa1, T1, Q1 = self.HTC1.htc(iter_time,self.T[self.k1],(self.k1*self.dX+self.R0,0),(-1,0))
                 H[i]=(self.FuncTemp(self.Tlik-Q1*self.dX/2/self.lamda)+self.Hl)/2
             elif i==self.k2 and self.k2!=n-1:
-                alfa2, T2, Q2 = self.HTC2.htc(iter_time,self.T[self.k2])
+                alfa2, T2, Q2 = self.HTC2.htc(iter_time,self.T[self.k2],(self.k2*self.dX+self.R0,0),(1,0))
                 H[i]=(self.FuncTemp(self.Tlik-Q2*self.dX/2/self.lamda)+self.Hl)/2
             else:
                 H[i]=self.FuncTemp(self.T[i])
@@ -117,16 +120,16 @@ class Casting1D(Solidification):
             H1=self.FuncTemp(T1)
             H2=self.FuncTemp(T2)
             if iter_time>=TPs[out_iter]:
-                self.results[0].append(iter_time)              # Time [sec] 
-                self.results[1].append(minTemp)                # minTemp [C]
-                self.results[2].append(self.dX*(self.k2-self.k1-1)*1000) # Thickness [mm]
-                self.results[3].append(T1)                     # BulkTemp1 [C]
-                self.results[4].append(alfa1)                  # HTC1 [W/m2*K]
-                self.results[5].append(abs(Q1))                # Flux1 [W/m2]
-                self.results[6].append(T2)                     # BulkTemp2 [C]
-                self.results[7].append(alfa2)                  # HTC2 [W/m2*K]
-                self.results[8].append(abs(Q2))                # Flux2 [W/m2]
-                self.results[9].append(self.T.copy())          # Array-Temp [C]
+                self.ScalarResults[0].append(iter_time)              # Time [sec] 
+                self.ScalarResults[1].append(minTemp)                # minTemp [C]
+                self.ScalarResults[2].append(self.dX*(self.k2-self.k1-1)*1000) # Thickness [mm]
+                self.ScalarResults[3].append(T1)                     # BulkTemp1 [C]
+                self.ScalarResults[4].append(alfa1)                  # HTC1 [W/m2*K]
+                self.ScalarResults[5].append(abs(Q1))                # Flux1 [W/m2]
+                self.ScalarResults[6].append(T2)                     # BulkTemp2 [C]
+                self.ScalarResults[7].append(alfa2)                  # HTC2 [W/m2*K]
+                self.ScalarResults[8].append(abs(Q2))                # Flux2 [W/m2]
+                self.ScalarResults[9].append(self.T.copy())          # Array-Temp [C]
                 logfile=open(self.LogFile,'a')
                 Log_message('  {:6.1f}   |    {:6.1f}   |    {:6.2f}     |     {:6.1f}     |     {:6.2f}     |    {:6.3f}     |    {:6.3f}'.format(iter_time, minTemp, self.dX*(self.k2-self.k1-1)*1000, T1, T2, alfa1/1000, alfa2/1000),logfile)
                 logfile.close()
@@ -208,7 +211,7 @@ class Casting1D(Solidification):
             if self.KsiI[i]==0:
                 ValueLoc=0
             else:
-                ValueLoc=2*creep_law(self.KsiI[i],self.results[self.Tindx][j][i])/self.KsiI[i]/3*self.dX
+                ValueLoc=2*creep_law(self.KsiI[i],self.BodyResults[0][j][i])/self.KsiI[i]/3*self.dX
             if (i==n0)or(i==self.n):
                 Nf[0]+=ValueLoc*(2*ksiC2+ksiC3)/2
                 Nf[1]+=ValueLoc*(2*ksiC3+ksiC2)/2
@@ -226,34 +229,33 @@ class Casting1D(Solidification):
             logfile.close()
             exit()
         ScalarResList_add=['Shrinkage [-]',]
-        ArrayResList_add=['Creep rate [1/sec]','Creep strain [-]']
+        BodyResList_add=['Creep rate [1/sec]','Creep strain [-]']
         for Name in ScalarResList_add:
             if not Name in self.ScalarResList:
                 self.ScalarResList.append(Name)
-                self.results.insert(len(self.ScalarResList)-1,[])
-        for Name in ArrayResList_add:
-            if not Name in self.ArrayResList:
-                self.ArrayResList.append(Name)
-                self.results.append([])
-        self.Tindx=len(self.ScalarResList)
-        Num=len(self.results[0])
+                self.ScalarResults.append([])
+        for Name in BodyResList_add:
+            if not Name in self.BodyResList:
+                self.BodyResList.append(Name)
+                self.BodyResults.append([])
+        Num=len(self.ScalarResults[0])
         ksi2=0.0
         ksi3=0.0
         Shrink=0.0
         self.SpT=np.zeros(self.n+1)
         self.KsiI=np.zeros(self.n+1)
         EpsC=np.zeros(self.n+1)
-        self.results[self.Tindx-1].append(0.0)
-        self.results[-2].append(self.KsiI.copy())
-        self.results[-1].append(EpsC.copy())
+        self.ScalarResults[-1].append(0.0)
+        self.BodyResults[-2].append(self.KsiI.copy())
+        self.BodyResults[-1].append(EpsC.copy())
         for j in range(1,Num):
-            dtau=self.results[0][j]-self.results[0][j-1]            
+            dtau=self.ScalarResults[0][j]-self.ScalarResults[0][j-1]            
             nk=self.n
             for i in range(self.n+1):
                 self.KsiI[i]=0.0
-                if nk==self.n and self.results[self.Tindx][j-1][i]<self.Tsol: nk=i
-                self.SpT[i]=self.beta_sol*(self.results[self.Tindx][j][i]-self.results[self.Tindx][j-1][i])/dtau
-            if self.results[self.Tindx][j-1][self.n]<self.Tsol:
+                if nk==self.n and self.BodyResults[0][j-1][i]<self.Tsol: nk=i
+                self.SpT[i]=self.beta_sol*(self.BodyResults[0][j][i]-self.BodyResults[0][j-1][i])/dtau
+            if self.BodyResults[0][j-1][self.n]<self.Tsol:
                 if ksi2==0: dksi2=-self.beta_sol*100
                 else: dksi2=-100*self.Epsilon*ksi2
                 if ksi3==0: dksi3=-self.beta_sol*100
@@ -277,51 +279,52 @@ class Casting1D(Solidification):
                     elif ((F2[1]-F0[1])*F0[1])>=0: ksi3=ksi3
                     else: ksi3+=dksi3
             Shrink+=ksi2*dtau
-            self.results[self.Tindx-1].append(-Shrink)
-            self.results[-2].append(self.KsiI.copy())
+            self.ScalarResults[-1].append(-Shrink)
+            self.BodyResults[-2].append(self.KsiI.copy())
             for i in range(self.n+1):
                 if i<nk:
                     EpsC[i]=0.0
                 else:
-                    EpsC[i]=self.results[-1][-1][i]+dtau*self.KsiI[i]
-            self.results[-1].append(EpsC.copy())
+                    EpsC[i]=self.BodyResults[-1][-1][i]+dtau*self.KsiI[i]
+            self.BodyResults[-1].append(EpsC.copy())
         logfile=open(self.LogFile,'a')
         Log_message('\n** Mechanical calculation has finished',logfile)
         logfile.close()
-#---------------------------------
-#--------FUNCTIONS----------------
-#---------------------------------
-def output_vtu(FileName, model):
-    indx=len(model.ScalarResList)
-    Points=vtk.vtkPoints()
-    mesh=vtk.vtkUnstructuredGrid()
-    Dict_nodes={}
-    Dict_nodes[0]={}
-    cells=[]
-    node=0
-    for i in range(len(model.results[indx])-1):
-        Dict_nodes[(i+1)]={}
-        for j in range(len(model.results[indx][i])-1):
-            for i1 in range(2):
-                for j1 in range(2):
-                    if not j+j1 in Dict_nodes[(i+i1)]:
-                        Dict_nodes[(i+i1)][j+j1]=node
-                        Points.InsertNextPoint((j+j1)*model.dX,0,model.results[0][i+i1])
-                        node+=1
-            cells.append((Dict_nodes[i][j],Dict_nodes[(i+1)][j],Dict_nodes[(i+1)][j+1],Dict_nodes[i][j+1]))
-    mesh.Allocate(len(cells))
-    mesh.SetPoints(Points)
-    for cell in cells:
-        mesh.InsertNextCell(vtk.VTK_QUAD,4,cell)
-    for jj, Name in enumerate(model.ArrayResList):
-        Res=vtk.vtkFloatArray()
-        Res.SetName(Name)
-        Res.SetNumberOfValues(node)
-        for i in Dict_nodes:
-            for j in Dict_nodes[i]:
-                Res.SetValue(Dict_nodes[i][j],model.results[indx+jj][i][j])
-        mesh.GetPointData().AddArray(Res)
-    output=vtk.vtkXMLUnstructuredGridWriter()
-    output.SetInputData(mesh)
-    output.SetFileName(FileName)
-    output.Write()
+    def output_vtu(self, vel=0, level=0):
+        '''vel - casting speed [m/min], level - mould level [m]/t
+        if vel=0, the results are over time'''
+        FileName=self.LogFile[:self.LogFile.rfind('.')]+'_res.vtu'
+        Points=vtk.vtkPoints()
+        mesh=vtk.vtkUnstructuredGrid()
+        Dict_nodes={}
+        Dict_nodes[0]={}
+        cells=[]
+        node=0
+        for i in range(len(self.BodyResults[0])-1):
+            Dict_nodes[(i+1)]={}
+            for j in range(len(self.BodyResults[0][i])-1):
+                for i1 in range(2):
+                    if vel==0: Z=self.results[0][i+i1]
+                    else: Z=self.results[0][i+i1]*vel/60+level
+                    for j1 in range(2):
+                        if not j+j1 in Dict_nodes[(i+i1)]:
+                            Dict_nodes[(i+i1)][j+j1]=node
+                            Points.InsertNextPoint((j+j1)*self.dX,0,Z)
+                            node+=1
+                cells.append((Dict_nodes[i][j],Dict_nodes[(i+1)][j],Dict_nodes[(i+1)][j+1],Dict_nodes[i][j+1]))
+        mesh.Allocate(len(cells))
+        mesh.SetPoints(Points)
+        for cell in cells:
+            mesh.InsertNextCell(vtk.VTK_QUAD,4,cell)
+        for jj, Name in enumerate(self.BodyResList):
+            Res=vtk.vtkFloatArray()
+            Res.SetName(Name)
+            Res.SetNumberOfValues(node)
+            for i in Dict_nodes:
+                for j in Dict_nodes[i]:
+                    Res.SetValue(Dict_nodes[i][j],self.BodyResults[jj][i][j])
+            mesh.GetPointData().AddArray(Res)
+        output=vtk.vtkXMLUnstructuredGridWriter()
+        output.SetInputData(mesh)
+        output.SetFileName(FileName)
+        output.Write()
