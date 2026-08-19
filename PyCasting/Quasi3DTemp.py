@@ -141,6 +141,7 @@ class Quasi3DTemp(Solidification):
         self.HTC2={}
         self.Normals={}
         self.HTC2length={}
+        self.GG={}
         for key in HTC2:
             self.HTC2[key]=HTC2[key]
             self.HTC2[key].Port_In=self.Port_Out
@@ -149,22 +150,28 @@ class Quasi3DTemp(Solidification):
                 OriginNode=self.fem.point_sets[key+'_origin'][0]
                 self.HTC2[key].Origin=[self.fem.points[OriginNode][0],self.fem.points[OriginNode][1]]
             self.Normals[key]={}
-            self.HTC2length[key]=0
+            self.HTC2length[key]=0 # m
+            self.GG[key]={}        # m
             for FaceSet in self.fem.faces[key]:
                 face_num=self.fem.faces[key][FaceSet]
                 for ElNum in self.fem.cell_sets[FaceSet][0]:
                     Node0=self.fem.cells[0].data[ElNum][FacesNodes['quad'][face_num][0]]
                     Node1=self.fem.cells[0].data[ElNum][FacesNodes['quad'][face_num][1]]
                     Norm=[self.fem.points[Node1][1]-self.fem.points[Node0][1],self.fem.points[Node0][0]-self.fem.points[Node1][0]]
-                    self.HTC2length[key]+=np.linalg.norm(Norm)
+                    EdgeLen=np.linalg.norm(Norm)
+                    self.HTC2length[key]+=EdgeLen
                     if not Node0 in self.Normals[key]:
                         self.Normals[key][Node0]=Norm
+                        self.GG[key][Node0]=EdgeLen/2
                     else:
                         self.Normals[key][Node0] = [ self.Normals[key][Node0][i]+Norm[i] for i in range(2)]
+                        self.GG[key][Node0]+=EdgeLen/2
                     if not Node1 in self.Normals[key]:
                         self.Normals[key][Node1]=Norm
+                        self.GG[key][Node1]=EdgeLen/2
                     else:
                         self.Normals[key][Node1] = [ self.Normals[key][Node1][i]+Norm[i] for i in range(2)]
+                        self.GG[key][Node1]+=EdgeLen/2
             for Node in self.Normals[key]:
                 VecLen=np.linalg.norm(self.Normals[key][Node])
                 self.Normals[key][Node][:]/=VecLen
@@ -183,15 +190,15 @@ class Quasi3DTemp(Solidification):
 # FullTime     - Casting time for calculation, [sec]
 # kj           - convergence coefficient (less coefficient, less time step)
 # out_dtau     - time period between outputs, [sec]
-# VTUHFlowFile - name vtu-file for heat flow output. There is no output by default
 # wc           - relative coordinates for flux integretaion
-    def RunThermCalc(self, FullTime, kj=0.5, out_dtau=0.25, VTUHFlowFile='', wc=(0.125,0.375)):
+    def RunThermCalc(self, FullTime, kj=0.5, out_dtau=0.25, wc=(0.125,0.375)):
         HeatFlow_level={}
         XEl=np.zeros(4)
         YEl=np.zeros(4)
         #-----------------------OUTPUT NODES AND TIME POINTS-----------------------
         self.ScalarResList=['Time [sec]', 'Min Temp [C]', 'Max Temp [C]']
         self.BodyResList=['Temp [C]',]
+        self.SurfResList=['Flux [MW/m2K]',]
         self.PointScreen={} #Node and BC for data printing
         for key in self.fem.point_sets:
             if len(self.fem.point_sets[key])==1:
@@ -203,6 +210,8 @@ class Quasi3DTemp(Solidification):
                         prefix=BcName+'-Nd'+str(Node)+':'
                         self.ScalarResList+=[prefix+'Bulk Temp [C]', prefix+' Temp [C]']
         self.ScalarResults=[]
+        self.BodyResults=[]
+        self.SurfResults={}
         for Name in self.ScalarResList:
             self.ScalarResults.append([])
         for Name in self.BodyResList:
@@ -210,6 +219,9 @@ class Quasi3DTemp(Solidification):
         TPset={0,FullTime}
         for BcName in self.HTC2:
             TPset = TPset | self.HTC2[BcName].TimePoints
+            self.SurfResults[BcName]=[]
+            for Name in self.SurfResList:
+                self.SurfResults[BcName].append([])
         TPs=list(TPset)
         TPs.sort()
         for i in range(len(TPs)-1):
@@ -223,7 +235,6 @@ class Quasi3DTemp(Solidification):
         # ---
         iter_time=0
         dtau=kj*self.DistMin**2*min(self.ro_liq*self.Cl,self.ro_sol*self.Cr)/4/self.lamda  #sek
-        ElRow=len(TPs)-1
         n=self.fem.points.shape[0]
         minTemp=min(self.T)
         logfile=open(self.LogFile,'a')
@@ -241,36 +252,6 @@ class Quasi3DTemp(Solidification):
         Log_message('********************************************',logfile)
         Log_message(' Time, sec | Min Temp, C | Max Temp, C |',logfile)
         logfile.close()
-        #------------VTUSurfFile--------------------
-        if VTUHFlowFile!='':
-            QData_mesh={}
-            QData_points={}
-            QSurf={}
-            for BcName in self.HTC2:
-                QData_points[BcName]=vtk.vtkPoints()
-                for i in range(ElRow+1):
-                    for Node in self.fem.point_sets[BcName]:
-                        QData_points[BcName].InsertNextPoint(self.fem.points[Node][0],self.fem.points[Node][1],TPs[i])
-                SurfNodes=np.full(n,n,dtype=np.uint32)
-                for i, Node in enumerate(self.fem.point_sets[BcName]): SurfNodes[Node]=i
-                SurfNodeNum=len(self.fem.point_sets[BcName])
-                QData_mesh[BcName]=vtk.vtkUnstructuredGrid()                
-                SurfElemNum=0
-                for SurfEl in self.fem.faces[BcName]:
-                    SurfElemNum+=self.fem.cell_sets[SurfEl][0].shape[0]
-                QData_mesh[BcName].Allocate(ElRow*2*SurfElemNum)
-                for i in range(ElRow):
-                    for SurfEl in self.fem.faces[BcName]:
-                        face_num=self.fem.faces[BcName][SurfEl]
-                        for El in self.fem.cell_sets[SurfEl][0]:
-                            Node0=self.fem.cells[0].data[El][FacesNodes['quad'][face_num][0]]
-                            Node1=self.fem.cells[0].data[El][FacesNodes['quad'][face_num][1]]
-                            QData_mesh[BcName].InsertNextCell(vtk.VTK_TRIANGLE,3,(i*SurfNodeNum+SurfNodes[Node1],i*SurfNodeNum+SurfNodes[Node0],(i+1)*SurfNodeNum+SurfNodes[Node0]))
-                            QData_mesh[BcName].InsertNextCell(vtk.VTK_TRIANGLE,3,(i*SurfNodeNum+SurfNodes[Node1],(i+1)*SurfNodeNum+SurfNodes[Node0],(i+1)*SurfNodeNum+SurfNodes[Node1]))
-                QData_mesh[BcName].SetPoints(QData_points[BcName])
-                QSurf[BcName]=vtk.vtkFloatArray()
-                QSurf[BcName].SetName('Q, [MW/m2]')
-                QSurf[BcName].SetNumberOfValues((ElRow+1)*SurfNodeNum)
         #--------------------------------
         ElTemp=np.zeros(4)
         wN=len(wc)
@@ -278,17 +259,12 @@ class Quasi3DTemp(Solidification):
         for i, Temp in enumerate(self.T):
             H[i]=self.FuncTemp(Temp)
         KK=np.zeros((self.fem.cells[0].data.shape[0],4,4))
-        GG=np.zeros((self.fem.cells[0].data.shape[0],4))
         for El in range(self.fem.cells[0].data.shape[0]):
             for i in range(4):
                 XEl[i]=self.fem.points[self.fem.cells[0].data[El][i]][0]
                 YEl[i]=self.fem.points[self.fem.cells[0].data[El][i]][1]
             L1=((XEl[0]+XEl[1]-XEl[2]-XEl[3])**2+(YEl[0]+YEl[1]-YEl[2]-YEl[3])**2)**0.5/2
             L2=((XEl[0]+XEl[3]-XEl[1]-XEl[2])**2+(YEl[0]+YEl[3]-YEl[1]-YEl[2])**2)**0.5/2
-            GG[El][0]=((XEl[1]-XEl[0])**2+(YEl[1]-YEl[0])**2)**0.5/2 #m
-            GG[El][1]=((XEl[2]-XEl[1])**2+(YEl[2]-YEl[1])**2)**0.5/2 #m
-            GG[El][2]=((XEl[3]-XEl[2])**2+(YEl[3]-YEl[2])**2)**0.5/2 #m
-            GG[El][3]=((XEl[0]-XEl[3])**2+(YEl[0]-YEl[3])**2)**0.5/2 #m
             # n1: ksi=0.5            
             for nu in wc:
                 KK[El][0]+=dtau*L1/2*np.array((nu-1,1-nu,nu,-nu))/((self.dxydksi(nu,XEl))**2+(self.dxydksi(nu,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][0]]/wN   #sek/m2
@@ -320,17 +296,10 @@ class Quasi3DTemp(Solidification):
                 for BcName in self.PointScreen:
                     for Node in self.PointScreen[BcName]:
                         alfa2, T2, Q2 = self.HTC2[BcName].htc(iter_time,self.T[Node],self.fem.points[Node],self.Normals[BcName][Node])
-                        self.ScalarResults[3+2*Count].append(T2)              # Bulk Temp [C]
-                        self.ScalarResults[3+2*Count+1].append(self.T[Node])  # Surface Temp [C]
+                        self.ScalarResults[3+2*Count].append(T2)             # Bulk Temp [C]
+                        self.ScalarResults[3+2*Count+1].append(self.T[Node]) # Surface Temp [C]
                         Count+=1
-                self.BodyResults[0].append(self.T.copy())           # Array-Temp [C]
-                if VTUHFlowFile!='':
-                    for BcName in self.HTC2:
-                        Num=len(self.fem.point_sets[BcName])
-                        for Node in self.fem.point_sets[BcName]:
-                            alfa2, T2, Q2 = self.HTC2[BcName].htc(iter_time,self.T[Node],self.fem.points[Node],self.Normals[BcName][Node])
-                            QSurf[BcName].SetValue(Num*out_iter+SurfNodes[BcName][Node],Q2/1000000)
-                out_iter+=1
+                self.BodyResults[0].append(self.T.copy())                    # Array-Temp [C]                
             #----------Heat calculation-------------------------
             for BcName in self.HTC2:
                 HeatFlow_level[BcName]=0
@@ -338,15 +307,17 @@ class Quasi3DTemp(Solidification):
                 for i in range(4): ElTemp[i]=self.T[self.fem.cells[0].data[El][i]]
                 for i in range(4): H[self.fem.cells[0].data[El][i]]+=np.dot(KK[El][i],ElTemp)*self.lamda  #J/m3
             for BcName in self.HTC2:
-                for SurfEl in self.fem.faces[BcName]:
-                    face_num=self.fem.faces[BcName][SurfEl]
-                    for El in self.fem.cell_sets[SurfEl][0]:
-                        for i in range(2):
-                            Node_indx=FacesNodes['quad'][face_num][i]
-                            Node=self.fem.cells[0].data[El][Node_indx]
-                            alfa2, T2, Q2 = self.HTC2[BcName].htc(iter_time,self.T[Node],self.fem.points[Node],self.Normals[BcName][Node])
-                            HeatFlow_level[BcName]-=GG[El][face_num]*Q2*dtau #J/m  
-                            H[Node]+=dtau*GG[El][face_num]*Q2/self.AREA[self.fem.cells[0].data[El][Node_indx]] #J/m3
+                if iter_time>=TPs[out_iter]:
+                    self.SurfResults[BcName][0].append([])
+                for i, Node in enumerate(self.fem.point_sets[BcName]):
+                    alfa2, T2, Q2 = self.HTC2[BcName].htc(iter_time,self.T[Node],self.fem.points[Node],self.Normals[BcName][Node])
+                    Value=self.GG[BcName][Node]*Q2*dtau #J/m 
+                    HeatFlow_level[BcName]-=Value
+                    H[Node]+=Value/self.AREA[Node]      #J/m3
+                    if iter_time>=TPs[out_iter]:
+                        self.SurfResults[BcName][0][-1].append(-Q2/1000000)
+            if iter_time>=TPs[out_iter]:
+                out_iter+=1
 #            self.HTC1.HeatUp(Q1*self.dtau, iter_time, self.dX*(self.k1-k10))
             for BcName in self.HTC2:
                 self.HTC2[BcName].HeatUp(HeatFlow_level[BcName]/self.HTC2length[BcName], iter_time, 0)
@@ -355,14 +326,6 @@ class Quasi3DTemp(Solidification):
             #----------Preparation for a next level---------------
             iter_time+=dtau
             minTemp=min(self.T)
-        #----------------------------------------
-        if VTUHFlowFile!='':
-            for BcName in self.fem.Surfs:
-                QData_mesh[BcName].GetPointData().SetScalars(QSurf[BcName])
-                output=vtk.vtkXMLUnstructuredGridWriter()
-                output.SetInputData(QData_mesh[BcName])
-                output.SetFileName(VTUHFlowFile[:VTUHFlowFile.rfind('.')]+'_'+BcName+'.vtu')                
-                output.Write()
 #-------------------------------------------------------------------------------
     def output_vtu(self, vel=0, level=0):
         '''vel - casting speed [m/min], level - mould level [m]/t
@@ -392,6 +355,45 @@ class Quasi3DTemp(Solidification):
         output.SetInputData(mesh)
         output.SetFileName(VTUFileName)
         output.Write()
+#-------------------------------------------------------------------------------
+    def output_surf_vtu(self, vel=0, level=0):
+        ElRow=len(self.ScalarResults[0])-1
+        for BcName in self.HTC2:
+            Points=vtk.vtkPoints()
+            for i in range(ElRow+1):
+                if vel==0: Z=self.ScalarResults[0][i]
+                else: Z=self.ScalarResults[0][i]*vel/60+level               
+                for Node in self.fem.point_sets[BcName]:
+                    Points.InsertNextPoint(self.fem.points[Node][0],self.fem.points[Node][1],Z)
+            SurfNodes={}
+            for i, Node in enumerate(self.fem.point_sets[BcName]): SurfNodes[Node]=i
+            SurfNodeNum=len(self.fem.point_sets[BcName])
+            mesh=vtk.vtkUnstructuredGrid()                
+            SurfElemNum=0
+            for FaceSet in self.fem.faces[BcName]:
+                SurfElemNum+=self.fem.cell_sets[FaceSet][0].shape[0]
+            mesh.Allocate(ElRow*2*SurfElemNum)
+            for i in range(ElRow):
+                for FaceSet in self.fem.faces[BcName]:
+                    face_num=self.fem.faces[BcName][FaceSet]
+                    for El in self.fem.cell_sets[FaceSet][0]:
+                        Node0=self.fem.cells[0].data[El][FacesNodes['quad'][face_num][0]]
+                        Node1=self.fem.cells[0].data[El][FacesNodes['quad'][face_num][1]]
+                        mesh.InsertNextCell(vtk.VTK_TRIANGLE,3,(i*SurfNodeNum+SurfNodes[Node1],i*SurfNodeNum+SurfNodes[Node0],(i+1)*SurfNodeNum+SurfNodes[Node0]))
+                        mesh.InsertNextCell(vtk.VTK_TRIANGLE,3,(i*SurfNodeNum+SurfNodes[Node1],(i+1)*SurfNodeNum+SurfNodes[Node0],(i+1)*SurfNodeNum+SurfNodes[Node1]))
+            mesh.SetPoints(Points)
+            for i, Name in enumerate(self.SurfResList):                
+                Res=vtk.vtkFloatArray()
+                Res.SetName(Name)
+                Res.SetNumberOfValues((ElRow+1)*SurfNodeNum)
+                for j in range(ElRow+1):
+                    for k in range(SurfNodeNum):
+                        Res.SetValue(SurfNodeNum*j+k,self.SurfResults[BcName][i][j][k])
+                mesh.GetPointData().SetScalars(Res)
+            output=vtk.vtkXMLUnstructuredGridWriter()
+            output.SetInputData(mesh)
+            output.SetFileName(self.LogFile[:self.LogFile.rfind('.')]+'_'+BcName+'.vtu')
+            output.Write()
 #-------------------------------------------------------------------------------
     def Stiffness(self, KapaRate, KapaN=20, creep_law=creep_NISK, vel=0, level=0):
         '''
