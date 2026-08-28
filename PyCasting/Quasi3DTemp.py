@@ -12,6 +12,8 @@ from meshio import read, Mesh, CellBlock
 from math import log
 from FEMtoolkit import FacesNodes, NodeIntoSurf
 from .Common import Log_message, Solidification, creep_NISK, SurfCoord
+#----------------------------------
+InnerEdg={0:{'L1':1,'L2':3},1:{'L1':0,'L2':2},2:{'L1':3,'L2':1},3:{'L1':2,'L2':0}}
 #----------------------------------------------------------------
 #---The function creates mesh for a rectangle section------------
 def Rect_Sec(FileName, Width, Thickness, MinSize=1, SurfSize=4, ElmSideRatio=5, DepthRatio=0.6):
@@ -77,6 +79,8 @@ class Quasi3DTemp(Solidification):
                 points[Node][j]=mesh_orig.points[Node][j]/1000 # millimeters -> meters
         cells = []
         self.AREA=np.zeros(points.shape[0])
+        self.L1=[]
+        self.L2=[]
         self.Size=0
         XEl=np.zeros(4)
         YEl=np.zeros(4)
@@ -89,10 +93,14 @@ class Quasi3DTemp(Solidification):
                     for i, Node in enumerate(El):
                         XEl[i]=points[Node][0]
                         YEl[i]=points[Node][1]
+                    #---areas around Nodes-----------
                     self.AREA[El[0]]+=abs(2*XEl[1]*YEl[3]-2*XEl[3]*YEl[1]+(3*XEl[0]-XEl[2])*(YEl[1]-YEl[3])+(3*YEl[0]-YEl[2])*(XEl[3]-XEl[1]))/16
                     self.AREA[El[1]]+=abs(2*XEl[2]*YEl[0]-2*XEl[0]*YEl[2]+(3*XEl[1]-XEl[3])*(YEl[2]-YEl[0])+(3*YEl[1]-YEl[3])*(XEl[0]-XEl[2]))/16
                     self.AREA[El[2]]+=abs(2*XEl[3]*YEl[1]-2*XEl[1]*YEl[3]+(3*XEl[2]-XEl[0])*(YEl[3]-YEl[1])+(3*YEl[2]-YEl[0])*(XEl[1]-XEl[3]))/16
                     self.AREA[El[3]]+=abs(2*XEl[0]*YEl[2]-2*XEl[2]*YEl[0]+(3*XEl[3]-XEl[1])*(YEl[0]-YEl[2])+(3*YEl[3]-YEl[1])*(XEl[2]-XEl[0]))/16
+                    #---half length of middle lines
+                    self.L1.append(((XEl[0]+XEl[1]-XEl[2]-XEl[3])**2+(YEl[0]+YEl[1]-YEl[2]-YEl[3])**2)**0.5/4) # along eta-axis
+                    self.L2.append(((XEl[0]+XEl[3]-XEl[1]-XEl[2])**2+(YEl[0]+YEl[3]-YEl[1]-YEl[2])**2)**0.5/4) # along ksi-axis
                     for face in FacesNodes[blck.type]:
                         dist=np.linalg.norm(points[El[face[0]]]-points[El[face[1]]])
                         if self.DistMin>dist: self.DistMin=dist
@@ -179,20 +187,18 @@ class Quasi3DTemp(Solidification):
             for Node in self.fem.point_sets[key]:
                 self.HTC2[key].PointList.append(SurfCoord(self.fem.points[Node],self.Normals[key][Node],self.HTC2[key].Origin))
             BoundNodes|=set(self.fem.point_sets[key])
-        for Node in list(BoundNodes):
-            self.Size-=self.AREA[Node]
         self.T=np.zeros(self.fem.points.shape[0])
     def dxydksi(self,nu,xy):
         return -(1-nu)*xy[0]+(1-nu)*xy[1]+nu*xy[2]-nu*xy[3]
     def dxydnu(self,ksi,xy):
         return -(1-ksi)*xy[0]-ksi*xy[1]+ksi*xy[2]+(1-ksi)*xy[3]
 #-------------------------------------------------------------------------------
-# FullTime     - Casting time for calculation, [sec]
-# kj           - convergence coefficient (less coefficient, less time step)
-# out_dtau     - time period between outputs, [sec]
-# wc           - relative coordinates for flux integretaion
+# FullTime - Casting time for calculation, [sec]
+# kj       - convergence coefficient (less coefficient, less time step)
+# out_dtau - time period between outputs, [sec]
+# wc       - relative coordinates for flux integretaion
     def RunThermCalc(self, FullTime, kj=0.5, out_dtau=0.25, wc=(0.125,0.375)):
-        HeatFlow_level={}
+        HeatFlow_Moulds={}
         XEl=np.zeros(4)
         YEl=np.zeros(4)
         #-----------------------OUTPUT NODES AND TIME POINTS-----------------------
@@ -239,6 +245,7 @@ class Quasi3DTemp(Solidification):
         minTemp=min(self.T)
         logfile=open(self.LogFile,'a')
         Log_message('\n** Preparation to the calculation',logfile)
+        Log_message(' Section Area, m2: {:6.3f}'.format(self.Size),logfile)
         Log_message(' Solidus Temperature, C: {:6.1f}'.format(self.Tsol),logfile)
         Log_message('Liquidus Temperature, C: {:6.1f}'.format(self.Tlik),logfile)
         Log_message('\tINITIAL CONDITIONS: ',logfile)
@@ -249,11 +256,13 @@ class Quasi3DTemp(Solidification):
         Log_message('Min. distance between nodes, mm: '+str(self.DistMin*1000),logfile)
         Log_message('Step time, sec: '+str(dtau),logfile)
         Log_message('Number of output points: '+str(len(TPs)-1),logfile)
-        Log_message('********************************************',logfile)
-        Log_message(' Time, sec | Min Temp, C | Max Temp, C |',logfile)
+        Log_message('***************************************************',logfile)
+        Log_message(' Time, sec | Min Temp, C | Max Temp, C | Solid, % |',logfile)
         logfile.close()
         #--------------------------------
         ElTemp=np.zeros(4)
+        KK_loc=np.zeros((4,4))
+        Q_loc=np.zeros(4)
         wN=len(wc)
         H=np.zeros(n)
         for i, Temp in enumerate(self.T):
@@ -263,31 +272,33 @@ class Quasi3DTemp(Solidification):
             for i in range(4):
                 XEl[i]=self.fem.points[self.fem.cells[0].data[El][i]][0]
                 YEl[i]=self.fem.points[self.fem.cells[0].data[El][i]][1]
-            L1=((XEl[0]+XEl[1]-XEl[2]-XEl[3])**2+(YEl[0]+YEl[1]-YEl[2]-YEl[3])**2)**0.5/2
-            L2=((XEl[0]+XEl[3]-XEl[1]-XEl[2])**2+(YEl[0]+YEl[3]-YEl[1]-YEl[2])**2)**0.5/2
             # n1: ksi=0.5            
             for nu in wc:
-                KK[El][0]+=dtau*L1/2*np.array((nu-1,1-nu,nu,-nu))/((self.dxydksi(nu,XEl))**2+(self.dxydksi(nu,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][0]]/wN   #sek/m2
-                KK[El][1]-=dtau*L1/2*np.array((nu-1,1-nu,nu,-nu))/((self.dxydksi(nu,XEl))**2+(self.dxydksi(nu,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][1]]/wN   #sek/m2
-                KK[El][3]+=dtau*L1/2*np.array((nu-0.5,0.5-nu,nu+0.5,-nu-0.5))/((self.dxydksi(nu+0.5,XEl))**2+(self.dxydksi(nu+0.5,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][3]]/wN   #sek/m2
-                KK[El][2]-=dtau*L1/2*np.array((nu-0.5,0.5-nu,nu+0.5,-nu-0.5))/((self.dxydksi(nu+0.5,XEl))**2+(self.dxydksi(nu+0.5,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][2]]/wN   #sek/m2
+                KK[El][0]+=dtau*self.lamda*self.L1[El]*np.array((nu-1,1-nu,nu,-nu))/((self.dxydksi(nu,XEl))**2+(self.dxydksi(nu,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][0]]/wN   #sek/m2
+                KK[El][1]-=dtau*self.lamda*self.L1[El]*np.array((nu-1,1-nu,nu,-nu))/((self.dxydksi(nu,XEl))**2+(self.dxydksi(nu,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][1]]/wN   #sek/m2
+                KK[El][3]+=dtau*self.lamda*self.L1[El]*np.array((nu-0.5,0.5-nu,nu+0.5,-nu-0.5))/((self.dxydksi(nu+0.5,XEl))**2+(self.dxydksi(nu+0.5,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][3]]/wN   #sek/m2
+                KK[El][2]-=dtau*self.lamda*self.L1[El]*np.array((nu-0.5,0.5-nu,nu+0.5,-nu-0.5))/((self.dxydksi(nu+0.5,XEl))**2+(self.dxydksi(nu+0.5,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][2]]/wN   #sek/m2
             # n2: nu=0.5            
             for ksi in wc:
-                KK[El][0]+=dtau*L2/2*np.array((ksi-1,-ksi,ksi,1-ksi))/((self.dxydnu(ksi,XEl))**2+(self.dxydnu(ksi,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][0]]/wN   #sek/m2
-                KK[El][3]-=dtau*L2/2*np.array((ksi-1,-ksi,ksi,1-ksi))/((self.dxydnu(ksi,XEl))**2+(self.dxydnu(ksi,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][3]]/wN   #sek/m2
-                KK[El][1]+=dtau*L2/2*np.array((ksi-0.5,-ksi-0.5,ksi+0.5,0.5-ksi))/((self.dxydnu(ksi+0.5,XEl))**2+(self.dxydnu(ksi+0.5,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][1]]/wN   #sek/m2
-                KK[El][2]-=dtau*L2/2*np.array((ksi-0.5,-ksi-0.5,ksi+0.5,0.5-ksi))/((self.dxydnu(ksi+0.5,XEl))**2+(self.dxydnu(ksi+0.5,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][2]]/wN   #sek/m2
+                KK[El][0]+=dtau*self.lamda*self.L2[El]*np.array((ksi-1,-ksi,ksi,1-ksi))/((self.dxydnu(ksi,XEl))**2+(self.dxydnu(ksi,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][0]]/wN   #sek/m2
+                KK[El][3]-=dtau*self.lamda*self.L2[El]*np.array((ksi-1,-ksi,ksi,1-ksi))/((self.dxydnu(ksi,XEl))**2+(self.dxydnu(ksi,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][3]]/wN   #sek/m2
+                KK[El][1]+=dtau*self.lamda*self.L2[El]*np.array((ksi-0.5,-ksi-0.5,ksi+0.5,0.5-ksi))/((self.dxydnu(ksi+0.5,XEl))**2+(self.dxydnu(ksi+0.5,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][1]]/wN   #sek/m2
+                KK[El][2]-=dtau*self.lamda*self.L2[El]*np.array((ksi-0.5,-ksi-0.5,ksi+0.5,0.5-ksi))/((self.dxydnu(ksi+0.5,XEl))**2+(self.dxydnu(ksi+0.5,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][2]]/wN   #sek/m2
         #--------------------------------
         while iter_time<FullTime and minTemp<=self.Tlik:
             #----------BCs preparation and output-------------------------
             self.HTC1.set_level(iter_time)
             for BcName in self.HTC2:
-                self.HTC2[BcName].set_level(iter_time)             
+                self.HTC2[BcName].set_level(iter_time)
+            SolidArea=0            
+            for i, Temp in enumerate(self.T):
+                if Temp<=self.Tlik:
+                    SolidArea+=self.AREA[i]
             #--------------------Printing & Output-------------------------------
             if iter_time>=TPs[out_iter]:
                 alfa1, T1, Q1 = self.HTC1.htc(iter_time,self.Tlik, (0.0,0.0), (1.0,0.0)) #just to get T1
                 logfile=open(self.LogFile,'a')
-                Log_message('  {:6.1f}   |    {:6.1f}   |    {:6.1f}   |'.format(iter_time, minTemp, T1),logfile)
+                Log_message('  {:6.1f}   |    {:6.1f}   |    {:6.1f}   |   {:5.1f}  |'.format(iter_time, minTemp, T1, SolidArea/self.Size*100),logfile)
                 logfile.close()
                 self.ScalarResults[0].append(iter_time) # Time [sec] 
                 self.ScalarResults[1].append(minTemp)   # minTemp [C]
@@ -301,27 +312,115 @@ class Quasi3DTemp(Solidification):
                         Count+=1
                 self.BodyResults[0].append(self.T.copy())                    # Array-Temp [C]                
             #----------Heat calculation-------------------------
+            HeatFlow_liq=0
+            LiqBorder={} # {Solid Node: List of liquid nodes}
             for BcName in self.HTC2:
-                HeatFlow_level[BcName]=0
+                HeatFlow_Moulds[BcName]=0
+            #----------SOLID PART-------------------------
             for El in range(self.fem.cells[0].data.shape[0]):
-                for i in range(4): ElTemp[i]=self.T[self.fem.cells[0].data[El][i]]
-                for i in range(4): H[self.fem.cells[0].data[El][i]]+=np.dot(KK[El][i],ElTemp)*self.lamda  #J/m3
+                SolidFlag=0
+                for Node in self.fem.cells[0].data[El]:
+                    if self.T[Node]<=self.Tlik:
+                        SolidFlag+=1
+                if SolidFlag:
+                    for i in range(4): ElTemp[i]=self.T[self.fem.cells[0].data[El][i]]
+                    if SolidFlag<4:
+                        for i in range(4):
+                            XEl[i]=self.fem.points[self.fem.cells[0].data[El][i]][0]
+                            YEl[i]=self.fem.points[self.fem.cells[0].data[El][i]][1]
+                        KK_loc[:][:]=0
+                        Q_loc[:]=0
+                        #------------------solid-liquid----------------------
+                        for i, Node in enumerate(self.fem.cells[0].data[El]):
+                            if self.T[Node]>self.Tlik:
+                                alfa1, T1, Q1 = self.HTC1.htc(iter_time,self.Tlik, self.fem.points[Node], (0.0,0.0))
+                                if self.T[self.fem.cells[0].data[El][InnerEdg[i]['L1']]]<=self.Tlik:
+                                    Q_loc[InnerEdg[i]['L1']]+=dtau*self.L1[El]*Q1
+                                    HeatFlow_liq+=dtau*self.L1[El]*Q1
+                                    if not self.fem.cells[0].data[El][InnerEdg[i]['L1']] in LiqBorder:
+                                        LiqBorder[self.fem.cells[0].data[El][InnerEdg[i]['L1']]]=[]
+                                    if not Node in LiqBorder[self.fem.cells[0].data[El][InnerEdg[i]['L1']]]:
+                                        LiqBorder[self.fem.cells[0].data[El][InnerEdg[i]['L1']]].append(Node)
+                                if self.T[self.fem.cells[0].data[El][InnerEdg[i]['L2']]]<=self.Tlik:
+                                    Q_loc[InnerEdg[i]['L2']]+=dtau*self.L2[El]*Q1
+                                    HeatFlow_liq+=dtau*self.L2[El]*Q1
+                                    if not self.fem.cells[0].data[El][InnerEdg[i]['L2']] in LiqBorder:
+                                        LiqBorder[self.fem.cells[0].data[El][InnerEdg[i]['L2']]]=[]
+                                    if not Node in LiqBorder[self.fem.cells[0].data[El][InnerEdg[i]['L2']]]:
+                                        LiqBorder[self.fem.cells[0].data[El][InnerEdg[i]['L2']]].append(Node)
+                        #------------------solid-solid----------------------
+                            else:
+                                if i==0:
+                                    if self.T[self.fem.cells[0].data[El][1]]<=self.Tlik:
+                                        KK_loc[0][0]-=dtau*self.lamda*self.L1[El]/((self.dxydksi(0.25,XEl))**2+(self.dxydksi(0.25,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][0]]
+                                        KK_loc[0][1]+=dtau*self.lamda*self.L1[El]/((self.dxydksi(0.25,XEl))**2+(self.dxydksi(0.25,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][0]]
+                                    if self.T[self.fem.cells[0].data[El][3]]<=self.Tlik:
+                                        KK_loc[0][0]-=dtau*self.lamda*self.L2[El]/((self.dxydnu(0.25,XEl))**2+(self.dxydnu(0.25,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][0]]
+                                        KK_loc[0][3]+=dtau*self.lamda*self.L2[El]/((self.dxydnu(0.25,XEl))**2+(self.dxydnu(0.25,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][0]]
+                                elif i==1:
+                                    if self.T[self.fem.cells[0].data[El][0]]<=self.Tlik:
+                                        KK_loc[1][1]-=dtau*self.lamda*self.L1[El]/((self.dxydksi(0.25,XEl))**2+(self.dxydksi(0.25,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][1]]
+                                        KK_loc[1][0]+=dtau*self.lamda*self.L1[El]/((self.dxydksi(0.25,XEl))**2+(self.dxydksi(0.25,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][1]]
+                                    if self.T[self.fem.cells[0].data[El][2]]<=self.Tlik:
+                                        KK_loc[1][1]-=dtau*self.lamda*self.L2[El]/((self.dxydnu(0.75,XEl))**2+(self.dxydnu(0.75,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][1]]
+                                        KK_loc[1][2]+=dtau*self.lamda*self.L2[El]/((self.dxydnu(0.75,XEl))**2+(self.dxydnu(0.75,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][1]]
+                                elif i==2:
+                                    if self.T[self.fem.cells[0].data[El][3]]<=self.Tlik:
+                                        KK_loc[2][2]-=dtau*self.lamda*self.L1[El]/((self.dxydksi(0.75,XEl))**2+(self.dxydksi(0.75,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][2]]
+                                        KK_loc[2][3]+=dtau*self.lamda*self.L1[El]/((self.dxydksi(0.75,XEl))**2+(self.dxydksi(0.75,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][2]]
+                                    if self.T[self.fem.cells[0].data[El][1]]<=self.Tlik:
+                                        KK_loc[2][2]-=dtau*self.lamda*self.L2[El]/((self.dxydnu(0.75,XEl))**2+(self.dxydnu(0.75,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][2]]
+                                        KK_loc[2][1]+=dtau*self.lamda*self.L2[El]/((self.dxydnu(0.75,XEl))**2+(self.dxydnu(0.75,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][2]]
+                                elif i==3:
+                                    if self.T[self.fem.cells[0].data[El][2]]<=self.Tlik:
+                                        KK_loc[3][3]-=dtau*self.lamda*self.L1[El]/((self.dxydksi(0.75,XEl))**2+(self.dxydksi(0.75,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][3]]
+                                        KK_loc[3][2]+=dtau*self.lamda*self.L1[El]/((self.dxydksi(0.75,XEl))**2+(self.dxydksi(0.75,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][3]]
+                                    if self.T[self.fem.cells[0].data[El][0]]<=self.Tlik:
+                                        KK_loc[3][3]-=dtau*self.lamda*self.L2[El]/((self.dxydnu(0.25,XEl))**2+(self.dxydnu(0.25,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][3]]
+                                        KK_loc[3][0]+=dtau*self.lamda*self.L2[El]/((self.dxydnu(0.25,XEl))**2+(self.dxydnu(0.25,YEl))**2)**0.5/self.AREA[self.fem.cells[0].data[El][3]]
+                        for i, Node in enumerate(self.fem.cells[0].data[El]):
+                            if self.T[Node]<=self.Tlik:
+                                H[Node]+=np.dot(KK_loc[i],ElTemp)+Q_loc[i]/self.AREA[self.fem.cells[0].data[El][i]] #J/m3
+                    else:
+                        for i, Node in enumerate(self.fem.cells[0].data[El]):
+                            H[Node]+=np.dot(KK[El][i],ElTemp) #J/m3
             for BcName in self.HTC2:
                 if iter_time>=TPs[out_iter]:
                     self.SurfResults[BcName][0].append([])
                 for i, Node in enumerate(self.fem.point_sets[BcName]):
                     alfa2, T2, Q2 = self.HTC2[BcName].htc(iter_time,self.T[Node],self.fem.points[Node],self.Normals[BcName][Node])
                     Value=self.GG[BcName][Node]*Q2*dtau #J/m 
-                    HeatFlow_level[BcName]-=Value
+                    HeatFlow_Moulds[BcName]-=Value
                     H[Node]+=Value/self.AREA[Node]      #J/m3
                     if iter_time>=TPs[out_iter]:
                         self.SurfResults[BcName][0][-1].append(-Q2/1000000)
             if iter_time>=TPs[out_iter]:
                 out_iter+=1
-#            self.HTC1.HeatUp(Q1*self.dtau, iter_time, self.dX*(self.k1-k10))
+            #----------Heat correction in the moulds--------------------
             for BcName in self.HTC2:
-                self.HTC2[BcName].HeatUp(HeatFlow_level[BcName]/self.HTC2length[BcName], iter_time, 0)
-            #----------Temperature calculation---------------            
+                self.HTC2[BcName].HeatUp(HeatFlow_Moulds[BcName]/self.HTC2length[BcName], iter_time, 0)
+            #-----------------------LIQUID PART--------------------
+            if SolidArea<self.Size:
+                H1=self.FuncTemp(T1)
+                for Node in range(n):
+                    if H[Node]>self.Hl:
+                        HeatFlow_liq+=(H1-H[Node])*self.AREA[Node]
+                self.HTC1.HeatUp(HeatFlow_liq, iter_time, -SolidArea)
+                H1=self.FuncTemp(self.HTC1.Tbulk)
+                for Node in range(n):
+                    if H[Node]>self.Hl:
+                        H[Node]=H1
+            #----------SOLIDIFICATION-------------------------------
+                if H1>self.Hl:
+                    for SolidNode in LiqBorder:
+                        AreaSum=0
+                        for Node in LiqBorder[SolidNode]:
+                            AreaSum+=self.AREA[Node]
+                        if (H1-self.Hl)*AreaSum<(self.Hl-H[SolidNode])*self.AREA[SolidNode]:
+                            for Node in LiqBorder[SolidNode]:
+                                H[Node]=self.Hl
+                            H[SolidNode]+=(H1-self.Hl)*AreaSum/self.AREA[SolidNode]
+            #----------Temperature recalculation--------------------            
             for Node in range(n):self.T[Node]=self.Temperature(H[Node])
             #----------Preparation for a next level---------------
             iter_time+=dtau
