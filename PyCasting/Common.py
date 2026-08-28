@@ -48,8 +48,8 @@ class Solidification:
         f.write('\n')
         n=len(self.ScalarResults[0])
         for i in range(n):
-            if vel==0: f.write(self.ScalarResults[0])
-            else: f.write(str(self.ScalarResults[0]*vel/60+level))
+            if vel==0: f.write(self.ScalarResults[0][i])
+            else: f.write(str(self.ScalarResults[0][i]*vel/60+level))
             for j in range(1, len(self.ScalarResList)):
                 f.write(';'+str(self.ScalarResults[j][i]))
             f.write('\n')
@@ -150,7 +150,7 @@ class HTC_pool(HTC):
     def HeatUp(self, J, tm, move):
         '''function to change bulk temperature according to energy\t
         J - average energy density [J/m2], tm - time [sec], move - accumulated movement of border [m]'''
-        self.X0=self.Size+move # current length 
+        self.X0=self.Size+move # current area 
         if self.X0>0: self.Tbulk-=self.kf*J/self.Cl/self.ro_liq/self.X0
 #--------------------------------------------------------------------
 #- FUNCTIONS for spray htc: HTC[W/m2K]=func(Val, Tspraywat[C], temp[C])---
