@@ -199,7 +199,7 @@ class Quasi3DTemp(Solidification):
 # kj       - convergence coefficient (less coefficient, less time step)
 # out_dtau - time period between outputs, [sec]
 # wc       - relative coordinates for flux integretaion
-    def RunThermCalc(self, FullTime, kj=0.5, out_dtau=0.25, wc=(0.125,0.375), Kf_sol=3.5):
+    def RunThermCalc(self, FullTime, kj=0.5, out_dtau=0.25, wc=(0.125,0.375), Kf_sol=1.0):
         HeatFlow_Moulds={}
         XEl=np.zeros(4)
         YEl=np.zeros(4)
@@ -318,6 +318,7 @@ class Quasi3DTemp(Solidification):
             HeatFlow_liq=0
             SolToLiq={} # {Solid Node: List of liquid nodes}
             LiqToSol={} # {Liquid Node: List of solid nodes}
+            BorderElem=[]
             for BcName in self.HTC2:
                 HeatFlow_Moulds[BcName]=0
             #----------SOLID PART-------------------------
@@ -326,6 +327,8 @@ class Quasi3DTemp(Solidification):
                 for Node in self.fem.cells[0].data[El]:
                     if self.T[Node]<=self.Tlik:
                         SolidFlag+=1
+                if SolidFlag>1 and SolidFlag<4:
+                    BorderElem.append(El)
                 if SolidFlag:
                     for i in range(4): ElTemp[i]=self.T[self.fem.cells[0].data[El][i]]
                     if SolidFlag<4:
@@ -426,16 +429,23 @@ class Quasi3DTemp(Solidification):
                 if H1>self.Hl:
                     SolidNodeSet=set()
                     LiqidNodeSet=set()
-                    for SolidNode in SolToLiq:
-                        AreaSum=0
-                        mxGrd=0
-                        for Node in SolToLiq[SolidNode]:
-                            AreaSum+=self.AREA[Node]*len(LiqToSol[Node])
-                            mxGrd+=SolToLiq[SolidNode][Node]
-                        if H[SolidNode]<self.FuncTemp(self.Tlik-Kf_sol*mxGrd)-Kf_sol*dHmax*AreaSum/self.AREA[SolidNode]:
-                            SolidNodeSet.add(SolidNode)
-                            for Node in SolToLiq[SolidNode]:
-                                LiqidNodeSet.add(Node)
+                    for El in BorderElem:
+                        SolidElNodeSet=set()
+                        LiqidElNodeSet=set()
+                        for Node in self.fem.cells[0].data[El]:
+                            if Node in SolToLiq:
+                                AreaSum=0
+                                mxGrd=0
+                                for LiqNode in SolToLiq[Node]:
+                                    AreaSum+=self.AREA[LiqNode]
+                                    mxGrd+=SolToLiq[Node][LiqNode]
+                                if H[Node]<self.FuncTemp(self.Tlik-Kf_sol*mxGrd)-Kf_sol*dHmax*AreaSum/self.AREA[Node]:
+                                    SolidElNodeSet.add(Node)
+                            if Node in LiqToSol:
+                                LiqidElNodeSet.add(Node)
+                        if len(SolidElNodeSet)>1:
+                            SolidNodeSet|=SolidElNodeSet
+                            LiqidNodeSet|=LiqidElNodeSet
                     if len(LiqidNodeSet)>0 and len(SolidNodeSet)>0:
                         HeatValue=0
                         for Node in list(LiqidNodeSet):
