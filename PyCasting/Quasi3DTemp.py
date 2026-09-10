@@ -51,7 +51,7 @@ def Rect_Sec(FileName, Width, Thickness, MinSize=1, SurfSize=4, ElmSideRatio=5, 
     for i in range(ny_cor+n_out+1):
         point_sets['narrow_side'].append((nx_cor+n_out+1)*(i+1)-1)
     point_sets['narrow_side_origin'].append(nx_cor+n_out+1-1)
-    model=Mesh(points, [CellBlock('quad', np.array(cells_data, dtype=np.int64))], point_sets=point_sets, faces={})
+    model=Mesh(points, [CellBlock('quad', np.array(cells_data, dtype=np.int64))], point_sets=point_sets)
     model.write(FileName)
 #--------------------------------------------------------
 #---Function applying initial conditions----------------
@@ -114,7 +114,9 @@ class Quasi3DTemp(Solidification):
                     cells.append([El[i] for i in IndxList])
             else:
                 cell_sum.append(cell_sum[-1])
-        self.fem=Mesh(points, [CellBlock('quad', np.array(cells))], faces={})
+        self.fem=Mesh(points, [CellBlock('quad', np.array(cells))], faces={}, point_data={'Switch':np.zeros(points.shape[0],dtype=np.int8)})
+        self.fem.point_data['KK']=np.zeros(points.shape[0],dtype=np.int8)
+        self.fem.point_data['Q']=np.zeros(points.shape[0],dtype=np.int8)
         for Node in range(self.fem.points.shape[0]):
             self.Size+=self.AREA[Node]
         cell_sets={}
@@ -197,10 +199,11 @@ class Quasi3DTemp(Solidification):
 # kj       - convergence coefficient (less coefficient, less time step)
 # out_dtau - time period between outputs, [sec]
 # wc       - relative coordinates for flux integretaion
-    def RunThermCalc(self, FullTime, kj=0.5, out_dtau=0.25, wc=(0.125,0.375)):
+    def RunThermCalc(self, FullTime, kj=0.5, out_dtau=0.25, wc=(0.125,0.375), Kf_sol=3.5):
         HeatFlow_Moulds={}
         XEl=np.zeros(4)
         YEl=np.zeros(4)
+        self.fem.point_data['Switch'].fill(0)
         #-----------------------OUTPUT NODES AND TIME POINTS-----------------------
         self.ScalarResList=['Time [sec]', 'Min Temp [C]', 'Max Temp [C]']
         self.BodyResList=['Temp [C]',]
@@ -245,7 +248,7 @@ class Quasi3DTemp(Solidification):
         minTemp=min(self.T)
         logfile=open(self.LogFile,'a')
         Log_message('\n** Preparation to the calculation',logfile)
-        Log_message(' Section Area, m2: {:6.3f}'.format(self.Size),logfile)
+        Log_message(' Section Area, m2: {:8.5f}'.format(self.Size),logfile)
         Log_message(' Solidus Temperature, C: {:6.1f}'.format(self.Tsol),logfile)
         Log_message('Liquidus Temperature, C: {:6.1f}'.format(self.Tlik),logfile)
         Log_message('\tINITIAL CONDITIONS: ',logfile)
@@ -313,7 +316,8 @@ class Quasi3DTemp(Solidification):
                 self.BodyResults[0].append(self.T.copy())                    # Array-Temp [C]                
             #----------Heat calculation-------------------------
             HeatFlow_liq=0
-            LiqBorder={} # {Solid Node: List of liquid nodes}
+            SolToLiq={} # {Solid Node: List of liquid nodes}
+            LiqToSol={} # {Liquid Node: List of solid nodes}
             for BcName in self.HTC2:
                 HeatFlow_Moulds[BcName]=0
             #----------SOLID PART-------------------------
@@ -336,18 +340,24 @@ class Quasi3DTemp(Solidification):
                                 alfa1, T1, Q1 = self.HTC1.htc(iter_time,self.Tlik, self.fem.points[Node], (0.0,0.0))
                                 if self.T[self.fem.cells[0].data[El][InnerEdg[i]['L1']]]<=self.Tlik:
                                     Q_loc[InnerEdg[i]['L1']]+=dtau*self.L1[El]*Q1
-                                    HeatFlow_liq+=dtau*self.L1[El]*Q1
-                                    if not self.fem.cells[0].data[El][InnerEdg[i]['L1']] in LiqBorder:
-                                        LiqBorder[self.fem.cells[0].data[El][InnerEdg[i]['L1']]]=[]
-                                    if not Node in LiqBorder[self.fem.cells[0].data[El][InnerEdg[i]['L1']]]:
-                                        LiqBorder[self.fem.cells[0].data[El][InnerEdg[i]['L1']]].append(Node)
+                                    HeatFlow_liq+=dtau*self.L1[El]*Q1 #J/m
+                                    if not self.fem.cells[0].data[El][InnerEdg[i]['L1']] in SolToLiq:
+                                        SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L1']]]={}
+                                    if not Node in SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L1']]]:
+                                        SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L1']]][Node]=2*Q1*self.L2[El]/self.lamda
+                                    if not Node in LiqToSol:
+                                        LiqToSol[Node]=set()
+                                    LiqToSol[Node].add(self.fem.cells[0].data[El][InnerEdg[i]['L1']])
                                 if self.T[self.fem.cells[0].data[El][InnerEdg[i]['L2']]]<=self.Tlik:
                                     Q_loc[InnerEdg[i]['L2']]+=dtau*self.L2[El]*Q1
-                                    HeatFlow_liq+=dtau*self.L2[El]*Q1
-                                    if not self.fem.cells[0].data[El][InnerEdg[i]['L2']] in LiqBorder:
-                                        LiqBorder[self.fem.cells[0].data[El][InnerEdg[i]['L2']]]=[]
-                                    if not Node in LiqBorder[self.fem.cells[0].data[El][InnerEdg[i]['L2']]]:
-                                        LiqBorder[self.fem.cells[0].data[El][InnerEdg[i]['L2']]].append(Node)
+                                    HeatFlow_liq+=dtau*self.L2[El]*Q1 #J/m
+                                    if not self.fem.cells[0].data[El][InnerEdg[i]['L2']] in SolToLiq:
+                                        SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L2']]]={}
+                                    if not Node in SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L2']]]:
+                                        SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L2']]][Node]=2*Q1*self.L1[El]/self.lamda
+                                    if not Node in LiqToSol:
+                                        LiqToSol[Node]=set()
+                                    LiqToSol[Node].add(self.fem.cells[0].data[El][InnerEdg[i]['L2']])
                         #------------------solid-solid----------------------
                             else:
                                 if i==0:
@@ -389,11 +399,12 @@ class Quasi3DTemp(Solidification):
                     self.SurfResults[BcName][0].append([])
                 for i, Node in enumerate(self.fem.point_sets[BcName]):
                     alfa2, T2, Q2 = self.HTC2[BcName].htc(iter_time,self.T[Node],self.fem.points[Node],self.Normals[BcName][Node])
-                    Value=self.GG[BcName][Node]*Q2*dtau #J/m 
-                    HeatFlow_Moulds[BcName]-=Value
+                    Value=self.GG[BcName][Node]*Q2*dtau #J/m
+                    HeatFlow_Moulds[BcName]+=Value
                     H[Node]+=Value/self.AREA[Node]      #J/m3
                     if iter_time>=TPs[out_iter]:
-                        self.SurfResults[BcName][0][-1].append(-Q2/1000000)
+#                        self.SurfResults[BcName][0][-1].append(-Q2/1000000)
+                        self.SurfResults[BcName][0][-1].append(alfa2)
             if iter_time>=TPs[out_iter]:
                 out_iter+=1
             #----------Heat correction in the moulds--------------------
@@ -402,6 +413,7 @@ class Quasi3DTemp(Solidification):
             #-----------------------LIQUID PART--------------------
             if SolidArea<self.Size:
                 H1=self.FuncTemp(T1)
+                dHmax=H1-self.Hl
                 for Node in range(n):
                     if H[Node]>self.Hl:
                         HeatFlow_liq+=(H1-H[Node])*self.AREA[Node]
@@ -412,19 +424,50 @@ class Quasi3DTemp(Solidification):
                         H[Node]=H1
             #----------SOLIDIFICATION-------------------------------
                 if H1>self.Hl:
-                    for SolidNode in LiqBorder:
+                    SolidNodeSet=set()
+                    LiqidNodeSet=set()
+                    for SolidNode in SolToLiq:
                         AreaSum=0
-                        for Node in LiqBorder[SolidNode]:
+                        mxGrd=0
+                        for Node in SolToLiq[SolidNode]:
+                            AreaSum+=self.AREA[Node]*len(LiqToSol[Node])
+                            mxGrd+=SolToLiq[SolidNode][Node]
+                        if H[SolidNode]<self.FuncTemp(self.Tlik-Kf_sol*mxGrd)-Kf_sol*dHmax*AreaSum/self.AREA[SolidNode]:
+                            SolidNodeSet.add(SolidNode)
+                            for Node in SolToLiq[SolidNode]:
+                                LiqidNodeSet.add(Node)
+                    if len(LiqidNodeSet)>0 and len(SolidNodeSet)>0:
+                        HeatValue=0
+                        for Node in list(LiqidNodeSet):
+                            H[Node]=self.Hl
+                            HeatValue+=(H1-self.Hl)*self.AREA[Node]
+                        AreaSum=0
+                        for Node in list(SolidNodeSet):
                             AreaSum+=self.AREA[Node]
-                        if (H1-self.Hl)*AreaSum<(self.Hl-H[SolidNode])*self.AREA[SolidNode]:
-                            for Node in LiqBorder[SolidNode]:
-                                H[Node]=self.Hl
-                            H[SolidNode]+=(H1-self.Hl)*AreaSum/self.AREA[SolidNode]
+                        dHmax=HeatValue/AreaSum
+                        for Node in list(SolidNodeSet):
+                            H[Node]+=dHmax
             #----------Temperature recalculation--------------------            
-            for Node in range(n):self.T[Node]=self.Temperature(H[Node])
+            for Node in range(n):
+                if self.T[Node]>self.Tlik and H[Node]<=self.Hl: self.fem.point_data['Switch'][Node]+=1
+                self.T[Node]=self.Temperature(H[Node])
             #----------Preparation for a next level---------------
             iter_time+=dtau
             minTemp=min(self.T)
+        logfile=open(self.LogFile,'a')
+        Log_message('\n** The calculation has been finished at '+str(iter_time-dtau)+' sec because',logfile)
+        if minTemp>self.Tlik:
+            Log_message('\tThe minimum temperature ('+str(minTemp)+') exceeds ',logfile)
+            Log_message('the liquidus temperature ('+str(self.Tlik)+') ',logfile)
+        if iter_time>FullTime:
+            Log_message('\tThe time ('+str(iter_time)+') exceeds the specified time ('+str(FullTime)+') ',logfile)
+        Count=0
+        for Value in self.fem.point_data['Switch']:
+            if Value>Count: Count=Value
+        if Count>1:
+            Log_message('\n** WARNING:\n',logfile)
+            Log_message('  '+str(Count)+' transitions occur from a solid state to a liquid state and back again\n',logfile)
+        logfile.close()
 #-------------------------------------------------------------------------------
     def output_vtu(self, vel=0, level=0):
         '''vel - casting speed [m/min], level - mould level [m]/t
