@@ -15,17 +15,17 @@ def meniscus(model, T0):
     for i in range(len(model.T)-1):
         model.T[i]=T0
     model.T[-2]=model.Tlik
-    alfa1, T1, Q1 = model.HTC1.htc(0, model.Tlik)
+    model.k1=model.n-1
+    model.k2=model.n    
+    alfa1, T1, Q1 = model.HTC1.htc(0.0, model.Tlik,(model.k1*model.dX+model.R0,0.0),(-1.0,0.0))
     Tin=model.Tlik-Q1/model.lamda*model.dX
     if Tin<T0:
         model.T[-1]=Tin
-    model.k1=model.n-1
-    model.k2=model.n
 def coldplate(model, Tcld, thick):
     model.k1=int((model.Size-thick)/2/model.dX)
     model.k2=int((model.Size+thick)/2/model.dX)
-    alfa1, T1 = model.HTC1.htc(0, Tcld)
-    alfa2, T2 = model.HTC2.htc(0, Tcld)
+    alfa1, T1 = model.HTC1.htc(0.0, Tcld,(-thick/2,0.0),(-1.0,0.0))
+    alfa2, T2 = model.HTC2.htc(0.0, Tcld,(thick/2,0.0),(1.0,0.0))
     for i in range(len(model.T)):
         if i<model.k1:
             model.T[i]=T1
@@ -36,7 +36,7 @@ def coldplate(model, Tcld, thick):
 #------------------------------------------
 #-------------Casting class----------------
 class Casting1D(Solidification):
-    def __init__(self, HTC1, HTC2, Size, n=100, Radial=False, R0=0, LogFile='Casting1D.log', Rewrite=True):
+    def __init__(self, HTC1, HTC2, Size, n=100, Radial=False, R0=0.0, LogFile='Casting1D.log', Rewrite=True):
         '''Size - half of thickness [m]'''
         self.LogFile=LogFile
         if Rewrite: logfile=open(LogFile,'w')
@@ -77,6 +77,7 @@ class Casting1D(Solidification):
         self.dtau=kj*self.dX*self.dX*min(self.ro_liq*self.Cl,self.ro_sol**self.Cr)/4/self.lamda  #sek
         self.Epsilon=Epsilon
         self.ScalarResults=[]
+        self.BodyResults=[]
         for Name in self.ScalarResList:
             self.ScalarResults.append([])
         for Name in self.BodyResList:
@@ -87,10 +88,10 @@ class Casting1D(Solidification):
         H=np.zeros(n)
         for i in range(n):
             if i==self.k1 and self.k1!=0:
-                alfa1, T1, Q1 = self.HTC1.htc(iter_time,self.T[self.k1],(self.k1*self.dX+self.R0,0),(-1,0))
+                alfa1, T1, Q1 = self.HTC1.htc(iter_time,self.T[self.k1],(self.k1*self.dX+self.R0,0.0),(-1.0,0.0))
                 H[i]=(self.FuncTemp(self.Tlik-Q1*self.dX/2/self.lamda)+self.Hl)/2
             elif i==self.k2 and self.k2!=n-1:
-                alfa2, T2, Q2 = self.HTC2.htc(iter_time,self.T[self.k2],(self.k2*self.dX+self.R0,0),(1,0))
+                alfa2, T2, Q2 = self.HTC2.htc(iter_time,self.T[self.k2],(self.k2*self.dX+self.R0,0.0),(1.0,0.0))
                 H[i]=(self.FuncTemp(self.Tlik-Q2*self.dX/2/self.lamda)+self.Hl)/2
             else:
                 H[i]=self.FuncTemp(self.T[i])
@@ -115,21 +116,21 @@ class Casting1D(Solidification):
             #----------BCs preparation and output-------------------------
             self.HTC1.set_level(iter_time)
             self.HTC2.set_level(iter_time)
-            alfa1, T1, Q1 = self.HTC1.htc(iter_time,self.T[self.k1])
-            alfa2, T2, Q2 = self.HTC2.htc(iter_time,self.T[self.k2])
+            alfa1, T1, Q1 = self.HTC1.htc(iter_time,self.T[self.k1],(self.k1*self.dX+self.R0,0.0),(-1.0,0.0))
+            alfa2, T2, Q2 = self.HTC2.htc(iter_time,self.T[self.k2],(self.k2*self.dX+self.R0,0.0),(1.0,0.0))
             H1=self.FuncTemp(T1)
             H2=self.FuncTemp(T2)
             if iter_time>=TPs[out_iter]:
-                self.ScalarResults[0].append(iter_time)              # Time [sec] 
-                self.ScalarResults[1].append(minTemp)                # minTemp [C]
+                self.ScalarResults[0].append(iter_time)                        # Time [sec] 
+                self.ScalarResults[1].append(minTemp)                          # minTemp [C]
                 self.ScalarResults[2].append(self.dX*(self.k2-self.k1-1)*1000) # Thickness [mm]
-                self.ScalarResults[3].append(T1)                     # BulkTemp1 [C]
-                self.ScalarResults[4].append(alfa1)                  # HTC1 [W/m2*K]
-                self.ScalarResults[5].append(abs(Q1))                # Flux1 [W/m2]
-                self.ScalarResults[6].append(T2)                     # BulkTemp2 [C]
-                self.ScalarResults[7].append(alfa2)                  # HTC2 [W/m2*K]
-                self.ScalarResults[8].append(abs(Q2))                # Flux2 [W/m2]
-                self.ScalarResults[9].append(self.T.copy())          # Array-Temp [C]
+                self.ScalarResults[3].append(T1)                               # BulkTemp1 [C]
+                self.ScalarResults[4].append(alfa1)                            # HTC1 [W/m2*K]
+                self.ScalarResults[5].append(abs(Q1))                          # Flux1 [W/m2]
+                self.ScalarResults[6].append(T2)                               # BulkTemp2 [C]
+                self.ScalarResults[7].append(alfa2)                            # HTC2 [W/m2*K]
+                self.ScalarResults[8].append(abs(Q2))                          # Flux2 [W/m2]
+                self.BodyResults[0].append(self.T.copy())                         # Array-Temp [C]
                 logfile=open(self.LogFile,'a')
                 Log_message('  {:6.1f}   |    {:6.1f}   |    {:6.2f}     |     {:6.1f}     |     {:6.2f}     |    {:6.3f}     |    {:6.3f}'.format(iter_time, minTemp, self.dX*(self.k2-self.k1-1)*1000, T1, T2, alfa1/1000, alfa2/1000),logfile)
                 logfile.close()
@@ -304,8 +305,8 @@ class Casting1D(Solidification):
             Dict_nodes[(i+1)]={}
             for j in range(len(self.BodyResults[0][i])-1):
                 for i1 in range(2):
-                    if vel==0: Z=self.results[0][i+i1]
-                    else: Z=self.results[0][i+i1]*vel/60+level
+                    if vel==0: Z=self.ScalarResults[0][i+i1]
+                    else: Z=self.ScalarResults[0][i+i1]*vel/60+level
                     for j1 in range(2):
                         if not j+j1 in Dict_nodes[(i+i1)]:
                             Dict_nodes[(i+i1)][j+j1]=node
