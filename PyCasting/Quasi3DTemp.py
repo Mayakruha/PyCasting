@@ -79,6 +79,8 @@ class Quasi3DTemp(Solidification):
                 points[Node][j]=mesh_orig.points[Node][j]/1000 # millimeters -> meters
         cells = []
         self.AREA=np.zeros(points.shape[0])
+        self.PERIM=np.zeros(points.shape[0])
+        self.EdgeSec={} #min Node, max Node, Element: Length
         self.L1=[]
         self.L2=[]
         self.Size=0
@@ -86,6 +88,7 @@ class Quasi3DTemp(Solidification):
         YEl=np.zeros(4)
         self.DistMin=-1
         cell_sum=[0]
+        cell_count=0
         for blck in mesh_orig.cells:
             if blck.type=='quad':
                 cell_sum.append(cell_sum[-1]+blck.data.shape[0])
@@ -93,15 +96,25 @@ class Quasi3DTemp(Solidification):
                     for i, Node in enumerate(El):
                         XEl[i]=points[Node][0]
                         YEl[i]=points[Node][1]
-                    #---areas around Nodes-----------
+                    #---areas around Nodes---------------
                     self.AREA[El[0]]+=abs(2*XEl[1]*YEl[3]-2*XEl[3]*YEl[1]+(3*XEl[0]-XEl[2])*(YEl[1]-YEl[3])+(3*YEl[0]-YEl[2])*(XEl[3]-XEl[1]))/16
                     self.AREA[El[1]]+=abs(2*XEl[2]*YEl[0]-2*XEl[0]*YEl[2]+(3*XEl[1]-XEl[3])*(YEl[2]-YEl[0])+(3*YEl[1]-YEl[3])*(XEl[0]-XEl[2]))/16
                     self.AREA[El[2]]+=abs(2*XEl[3]*YEl[1]-2*XEl[1]*YEl[3]+(3*XEl[2]-XEl[0])*(YEl[3]-YEl[1])+(3*YEl[2]-YEl[0])*(XEl[1]-XEl[3]))/16
                     self.AREA[El[3]]+=abs(2*XEl[0]*YEl[2]-2*XEl[2]*YEl[0]+(3*XEl[3]-XEl[1])*(YEl[0]-YEl[2])+(3*YEl[3]-YEl[1])*(XEl[2]-XEl[0]))/16
-                    #---half length of middle lines
+                    #---half length of middle lines------
                     self.L1.append(((XEl[0]+XEl[1]-XEl[2]-XEl[3])**2+(YEl[0]+YEl[1]-YEl[2]-YEl[3])**2)**0.5/4) # along eta-axis
                     self.L2.append(((XEl[0]+XEl[3]-XEl[1]-XEl[2])**2+(YEl[0]+YEl[3]-YEl[1]-YEl[2])**2)**0.5/4) # along ksi-axis
-                    for face in FacesNodes[blck.type]:
+                    #---perimeter around Nodes-----------
+                    for Node in El:
+                        self.PERIM[Node]+=self.L1[-1]+self.L2[-1]                
+                    for j, face in enumerate(FacesNodes[blck.type]):
+                        #---edge section---------------------
+                        minNode=min(El[face[0]],El[face[1]])
+                        maxNode=max(El[face[0]],El[face[1]])
+                        if not minNode in self.EdgeSec: self.EdgeSec[minNode]={}
+                        if not maxNode in self.EdgeSec[minNode]: self.EdgeSec[minNode][maxNode]={}
+                        if j==0 or j==2: self.EdgeSec[minNode][maxNode][cell_count]=self.L1[-1]
+                        elif j==1 or j==3: self.EdgeSec[minNode][maxNode][cell_count]=self.L2[-1]
                         dist=np.linalg.norm(points[El[face[0]]]-points[El[face[1]]])
                         if self.DistMin>dist: self.DistMin=dist
                         elif self.DistMin<0:
@@ -112,11 +125,11 @@ class Quasi3DTemp(Solidification):
                             else:
                                 IndxList=(0,3,2,1)
                     cells.append([El[i] for i in IndxList])
+                    cell_count+=1
             else:
                 cell_sum.append(cell_sum[-1])
         self.fem=Mesh(points, [CellBlock('quad', np.array(cells))], faces={}, point_data={'Switch':np.zeros(points.shape[0],dtype=np.int8)})
-        self.fem.point_data['KK']=np.zeros(points.shape[0],dtype=np.int8)
-        self.fem.point_data['Q']=np.zeros(points.shape[0],dtype=np.int8)
+        self.fem.point_data['Ratio']=np.zeros(points.shape[0])
         for Node in range(self.fem.points.shape[0]):
             self.Size+=self.AREA[Node]
         cell_sets={}
@@ -199,11 +212,12 @@ class Quasi3DTemp(Solidification):
 # kj       - convergence coefficient (less coefficient, less time step)
 # out_dtau - time period between outputs, [sec]
 # wc       - relative coordinates for flux integretaion
-    def RunThermCalc(self, FullTime, kj=0.5, out_dtau=0.25, wc=(0.125,0.375), Kf_sol=1.0):
+    def RunThermCalc(self, FullTime, kj=0.5, out_dtau=0.25, wc=(0.125,0.375), Kf_sol=2.3):
         HeatFlow_Moulds={}
         XEl=np.zeros(4)
         YEl=np.zeros(4)
         self.fem.point_data['Switch'].fill(0)
+        self.fem.point_data['Ratio'].fill(0)
         #-----------------------OUTPUT NODES AND TIME POINTS-----------------------
         self.ScalarResList=['Time [sec]', 'Min Temp [C]', 'Max Temp [C]']
         self.BodyResList=['Temp [C]',]
@@ -316,9 +330,7 @@ class Quasi3DTemp(Solidification):
                 self.BodyResults[0].append(self.T.copy())                    # Array-Temp [C]                
             #----------Heat calculation-------------------------
             HeatFlow_liq=0
-            SolToLiq={} # {Solid Node: List of liquid nodes}
-            LiqToSol={} # {Liquid Node: List of solid nodes}
-            BorderElem=[]
+            SolToLiq={} # {Solid Node: List of liquid nodes}          
             for BcName in self.HTC2:
                 HeatFlow_Moulds[BcName]=0
             #----------SOLID PART-------------------------
@@ -327,8 +339,6 @@ class Quasi3DTemp(Solidification):
                 for Node in self.fem.cells[0].data[El]:
                     if self.T[Node]<=self.Tlik:
                         SolidFlag+=1
-                if SolidFlag>1 and SolidFlag<4:
-                    BorderElem.append(El)
                 if SolidFlag:
                     for i in range(4): ElTemp[i]=self.T[self.fem.cells[0].data[El][i]]
                     if SolidFlag<4:
@@ -347,20 +357,18 @@ class Quasi3DTemp(Solidification):
                                     if not self.fem.cells[0].data[El][InnerEdg[i]['L1']] in SolToLiq:
                                         SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L1']]]={}
                                     if not Node in SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L1']]]:
-                                        SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L1']]][Node]=2*Q1*self.L2[El]/self.lamda
-                                    if not Node in LiqToSol:
-                                        LiqToSol[Node]=set()
-                                    LiqToSol[Node].add(self.fem.cells[0].data[El][InnerEdg[i]['L1']])
+                                        SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L1']]][Node]=[0.0, 0.0]
+                                    SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L1']]][Node][0]+=2*Q1*self.L2[El]/self.lamda*self.L1[El]
+                                    SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L1']]][Node][1]+=self.L1[El]
                                 if self.T[self.fem.cells[0].data[El][InnerEdg[i]['L2']]]<=self.Tlik:
                                     Q_loc[InnerEdg[i]['L2']]+=dtau*self.L2[El]*Q1
                                     HeatFlow_liq+=dtau*self.L2[El]*Q1 #J/m
                                     if not self.fem.cells[0].data[El][InnerEdg[i]['L2']] in SolToLiq:
                                         SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L2']]]={}
                                     if not Node in SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L2']]]:
-                                        SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L2']]][Node]=2*Q1*self.L1[El]/self.lamda
-                                    if not Node in LiqToSol:
-                                        LiqToSol[Node]=set()
-                                    LiqToSol[Node].add(self.fem.cells[0].data[El][InnerEdg[i]['L2']])
+                                        SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L2']]][Node]=[0.0, 0.0]
+                                    SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L2']]][Node][0]+=2*Q1*self.L1[El]/self.lamda*self.L2[El]
+                                    SolToLiq[self.fem.cells[0].data[El][InnerEdg[i]['L2']]][Node][1]+=self.L2[El]
                         #------------------solid-solid----------------------
                             else:
                                 if i==0:
@@ -406,8 +414,7 @@ class Quasi3DTemp(Solidification):
                     HeatFlow_Moulds[BcName]+=Value
                     H[Node]+=Value/self.AREA[Node]      #J/m3
                     if iter_time>=TPs[out_iter]:
-#                        self.SurfResults[BcName][0][-1].append(-Q2/1000000)
-                        self.SurfResults[BcName][0][-1].append(alfa2)
+                        self.SurfResults[BcName][0][-1].append(-Q2/1000000)
             if iter_time>=TPs[out_iter]:
                 out_iter+=1
             #----------Heat correction in the moulds--------------------
@@ -427,39 +434,80 @@ class Quasi3DTemp(Solidification):
                         H[Node]=H1
             #----------SOLIDIFICATION-------------------------------
                 if H1>self.Hl:
-                    SolidNodeSet=set()
-                    LiqidNodeSet=set()
-                    for El in BorderElem:
-                        SolidElNodeSet=set()
-                        LiqidElNodeSet=set()
-                        for Node in self.fem.cells[0].data[El]:
-                            if Node in SolToLiq:
-                                AreaSum=0
-                                mxGrd=0
+                    Connect={}
+                    LiqidNodeSet={} # Node Num: [Solid lenght, [connections]]
+                    for Node in SolToLiq:
+                        for LiqNode in SolToLiq[Node]:
+                            if not LiqNode in LiqidNodeSet:
+                                LiqidNodeSet[LiqNode]=[0.0,[]]
+                            LiqidNodeSet[LiqNode][0]+=SolToLiq[Node][LiqNode][1]
+                    LiqidNodeList=list(LiqidNodeSet)
+                    for i, LiqNode in enumerate(LiqidNodeList):
+                        for j in range(i+1,len(LiqidNodeList)):
+                            minNode=min(LiqNode,LiqidNodeList[j])
+                            maxNode=max(LiqNode,LiqidNodeList[j])
+                            if minNode in self.EdgeSec:
+                                if maxNode in self.EdgeSec[minNode]:
+                                    LiqidNodeSet[LiqNode][1].append([minNode,maxNode])
+                                    LiqidNodeSet[LiqidNodeList[j]][1].append([minNode,maxNode])
+                                    if not minNode in Connect:
+                                        Connect[minNode]={}
+                                        Connect[minNode][maxNode]=0
+                                        for cell_count in self.EdgeSec[minNode][maxNode]:
+                                            Connect[minNode][maxNode]+=self.EdgeSec[minNode][maxNode][cell_count]
+                    Flag=True
+                    while Flag:
+                        Flag=False
+                        for Node in list(SolToLiq):
+                            AreaSum=0
+                            deltaTemp=0
+                            for LiqNode in SolToLiq[Node]:
+                                AreaSum+=self.AREA[LiqNode]
+                                FluxLen=self.PERIM[LiqNode]-LiqidNodeSet[LiqNode][0]
+                                for edge in LiqidNodeSet[LiqNode][1]:
+                                    if edge[0] in Connect:
+                                        if edge[1] in Connect[edge[0]]: 
+                                            for El in self.EdgeSec[edge[0]][edge[1]]:
+                                                FluxLen-=self.EdgeSec[edge[0]][edge[1]][El]
+                                Value=SolToLiq[Node][LiqNode][0]/SolToLiq[Node][LiqNode][1]*FluxLen/SolToLiq[Node][LiqNode][1]#/LiqidNodeSet[LiqNode][0]
+                                if Value>deltaTemp: deltaTemp=Value
+                            if H[Node]>=self.FuncTemp(self.Tlik-Kf_sol*deltaTemp)-Kf_sol*dHmax*AreaSum/self.AREA[Node]:
                                 for LiqNode in SolToLiq[Node]:
-                                    AreaSum+=self.AREA[LiqNode]
-                                    mxGrd+=SolToLiq[Node][LiqNode]
-                                if H[Node]<self.FuncTemp(self.Tlik-Kf_sol*mxGrd)-Kf_sol*dHmax*AreaSum/self.AREA[Node]:
-                                    SolidElNodeSet.add(Node)
-                            if Node in LiqToSol:
-                                LiqidElNodeSet.add(Node)
-                        if len(SolidElNodeSet)>1:
-                            SolidNodeSet|=SolidElNodeSet
-                            LiqidNodeSet|=LiqidElNodeSet
-                    if len(LiqidNodeSet)>0 and len(SolidNodeSet)>0:
+                                    for edge in LiqidNodeSet[LiqNode][1]:
+                                        if edge[0] in Connect:
+                                            if edge[1] in Connect[edge[0]]:
+                                                Connect[edge[0]].pop(edge[1])
+                                            if len(Connect[edge[0]])==0:
+                                                Connect.pop(edge[0])
+                                SolToLiq.pop(Node)
+                                Flag=True
+                    if len(SolToLiq)>0:
+                        LiqSet=set()
+                        for Node in SolToLiq:
+                            for LiqNode in SolToLiq[Node]:
+                                LiqSet.add(LiqNode)                                   
+                                FluxLen=self.PERIM[LiqNode]-LiqidNodeSet[LiqNode][0]
+                                for edge in LiqidNodeSet[LiqNode][1]:
+                                    if edge[0] in Connect:
+                                        if edge[1] in Connect[edge[0]]: 
+                                            for El in self.EdgeSec[edge[0]][edge[1]]:
+                                                FluxLen-=self.EdgeSec[edge[0]][edge[1]][El]                               
+                                if self.fem.point_data['Ratio'][LiqNode]<Kf_sol*FluxLen//SolToLiq[Node][LiqNode][1]:
+                                    self.fem.point_data['Ratio'][LiqNode]=Kf_sol*FluxLen//SolToLiq[Node][LiqNode][1]
                         HeatValue=0
-                        for Node in list(LiqidNodeSet):
+                        for Node in list(LiqSet):
                             H[Node]=self.Hl
-                            HeatValue+=(H1-self.Hl)*self.AREA[Node]
+                            HeatValue+=(H1-self.Hl)*self.AREA[Node]                                
                         AreaSum=0
-                        for Node in list(SolidNodeSet):
-                            AreaSum+=self.AREA[Node]
+                        for Node in SolToLiq:
+                            AreaSum+=self.AREA[Node]                       
                         dHmax=HeatValue/AreaSum
-                        for Node in list(SolidNodeSet):
+                        for Node in SolToLiq:
                             H[Node]+=dHmax
             #----------Temperature recalculation--------------------            
             for Node in range(n):
-                if self.T[Node]>self.Tlik and H[Node]<=self.Hl: self.fem.point_data['Switch'][Node]+=1
+                if self.T[Node]>self.Tlik and H[Node]<=self.Hl:
+                    self.fem.point_data['Switch'][Node]+=1
                 self.T[Node]=self.Temperature(H[Node])
             #----------Preparation for a next level---------------
             iter_time+=dtau
