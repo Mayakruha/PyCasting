@@ -1,4 +1,5 @@
 from math import exp, log, tan, pi
+import vtk
 import numpy as np
 import sys
 #---------------------------------
@@ -126,7 +127,7 @@ class HTC_pool(HTC):
         self.kf=1+Radial
         self.LogFile=''
         self.TimePoints=set()
-    def SetParams(self, v, Zm, Tbulk, htc_tab=[[0,12.0],[2000.0,2000.0]]):
+    def SetParams(self, v, Zm, Tbulk, htc_tab=[[0,12.0],[2000.0,2000.0]], FileName=''):
         '''v    - Casting speed [m/min]\t
         Zm      - Level [m]\t
         Tbulk   - current temeprature\t
@@ -137,14 +138,106 @@ class HTC_pool(HTC):
         self.htc_tab=htc_tab
         self.lamda_liq, self.beta_liq, self.kvis, self.thdif, self.Tsol, self.Tlik, self.Cl, self.ro_liq, self.beta_sol, self.Size = self.Port_In()
         self.X0=self.Size
+        self.cell_0=0
+        self.cell_1=0
+        self.cell_last=0
+        if FileName:
+            reader=vtk.vtkXMLUnstructuredGridReader()
+            reader.SetFileName(FileName)
+            reader.Update()
+            self.vtkData=reader.GetOutput()
+            Cell_Num=self.vtkData.GetNumberOfCells()
+            self.cell_last=Cell_Num-1
+            self.Mtrxs=np.zeros((Cell_Num,3,3))
+            M=np.zeros((3,3))
+            V1=np.zeros(3)
+            V2=np.zeros(3)
+            for i in range(Cell_Num):
+                Points=self.vtkData.GetCell(i).GetPoints()
+                for j in range(3):
+                    V1[j]=Points.GetPoint(1)[j]-Points.GetPoint(0)[j]
+                    V2[j]=Points.GetPoint(2)[j]-Points.GetPoint(0)[j]
+                    M[j][0]=V1[j]
+                    M[j][1]=V2[j]                
+                Norm=np.cross(V1,V2)
+                Norm=Norm/np.linalg.norm(Norm)
+                for j in range(3): M[j][2]=Norm[j]
+                self.Mtrxs[i]=np.linalg.inv(M)
+        else:
+            self.vtkData=None
     def htc(self, tm, temp, coord, norm):
         '''return: htc [W/m2K], temp [C], Heat flux [W/m2]\t
         tm - time [sec], temp - temperature [C], coord - coordinate [m, m], norm - normal'''
-        z=self.Level+self.v*tm/60        
+        z=self.Level+self.v*tm/60
+        DistError=0.0001
+        GlPoint=np.zeros(3)
+        GlPoint[0]=coord[0]
+        GlPoint[1]=coord[1]
+        GlPoint[2]=z
+        V1=np.zeros(3)
+        #----level in vtk
+        if self.cell_0<self.cell_last:
+            Flag=True
+            zmin=0
+            zmax=0
+            while Flag:
+                for i in range(3):
+                    zp=self.vtkData.GetCell(self.cell_0).GetPoints().GetPoint(i)[2]
+                    if i==0 or zmin>zp:
+                        zmin=zp
+                    if i==0 or zmax<zp:
+                        zmax=zp
+                if (z>=zmin and z<=zmax) or self.cell_0==self.cell_last:
+                    Flag=False
+                elif self.cell_0<=self.cell_1:
+                    self.cell_0=self.cell_1+1
+                else:
+                    self.cell_0+=1
+            if self.cell_1<=self.cell_0 and self.cell_0<self.cell_last:
+                Flag=True
+                self.cell_1=self.cell_0+1
+                while Flag:
+                    for i in range(3):
+                        zp=self.vtkData.GetCell(self.cell_1).GetPoints().GetPoint(i)[2]
+                        if i==0 or zmin>zp:
+                            zmin=zp
+                        if i==0 or zmax<zp:
+                            zmax=zp
+                    if z>=zmin and z<=zmax and self.cell_1<self.cell_last:
+                        self.cell_1+=1
+                    else:
+                        self.cell_1-=1
+                        Flag=False
+        #----------alfa--------------------
+        if self.cell_0<self.cell_last:
+            MaxDist=-1
+            for i in range(self.cell_0,self.cell_1+1):
+                Points=self.vtkData.GetCell(i).GetPoints()
+                LcPoint=np.dot(self.Mtrxs[i],GlPoint-np.array(Points.GetPoint(0)))
+                if LcPoint[0]>=-DistError and LcPoint[1]>=-DistError and (LcPoint[0]+LcPoint[1])<=1+DistError:
+                    Dist=abs(LcPoint[2])
+                    if MaxDist<0 or Dist<MaxDist:
+                        MaxDist=Dist
+                        i_Cell=i
+                        Ksi=LcPoint[0]
+                        Nu=LcPoint[1]
+            if MaxDist>=0:
+                for k in range(3):
+                    CellNode=self.vtkData.GetCell(i_Cell).GetPointIds().GetId(k)
+                    V1[k]=self.vtkData.GetPointData().GetArray(0).GetValue(CellNode)
+                alfa=V1[0]+(V1[1]-V1[0])*Ksi+(V1[2]-V1[0])*Nu                
+            else:
+                f=open(self.LogFile,'a')
+                f.write('\n*** WARNING: HTC has not been extracted from the vtu-file\n')
+                f.write('    Level [m]: '+str(z)+'; Coordinates [m]: ('+str(coord[0])+','+str(coord[1])+')\n')
+                f.write('    Default HTC (2000) has been applied\n')
+                f.close()
+                alfa=2000
+        else:
+            alfa=np.interp(z, self.htc_tab[0],self.htc_tab[1])            
         if self.X0<=0:
             return 0, 0
-        else:
-            alfa=np.interp(z, self.htc_tab[0],self.htc_tab[1])
+        else:            
             Q=alfa*(self.Tbulk - self.Tlik)            
             return alfa, self.Tbulk, Q
     def HeatUp(self, J, tm, move):
@@ -261,8 +354,9 @@ class CCM(HTC):
         Log_message('Nominal HTC, kW/(m2K): '+str(self.alfa_wat0/1000), logfile)
         Log_message('Solid flux thickness at meniscus, mm: '+str(self.flux_thick_m*1000), logfile)
         self.iz=0
-        self.RollDist=self.SecCool[self.iz][0]-self.Height-self.SecCool[self.iz][1]/2
-        self.Nozzle_z=self.Height+self.RollDist/2
+        if len(self.SecCool)>0:
+            self.RollDist=self.SecCool[self.iz][0]-self.Height-self.SecCool[self.iz][1]/2
+            self.Nozzle_z=self.Height+self.RollDist/2
         Log_message('\n** Heat transfer parameters in the second cooling system', logfile)
         for ZoneName in self.Zones:
             Log_message('Zone '+ZoneName+':', logfile)
@@ -349,7 +443,8 @@ class CCM(HTC):
             self.TempW=self.Twat+Q/self.alfa_watz
             self.alfa_wat=self.alfa_watz*(self.Prandtl(self.Twat)/self.Prandtl(self.TempW))**0.25
             alfa=1/self.htc_resist(self.alfa_wat,temp)
-            return alfa, self.Twat, alfa*(self.Twat-temp) #mould
+#            return alfa, self.Twat, alfa*(self.Twat-temp) #mould
+            return self.flux_alfa(temp), self.Twat, alfa*(self.Twat-temp) #mould
         elif (self.iz>0 and z-self.SecCool[self.iz-1][0]<self.SecCool[self.iz-1][1]/2) or (self.SecCool[self.iz][0]-z<self.SecCool[self.iz][1]/2):
             return self.alfa_roll, self.Tair, self.alfa_roll*(self.Tair-temp)                               # under roll
         else:
